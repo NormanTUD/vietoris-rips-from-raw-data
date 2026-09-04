@@ -19,7 +19,7 @@ No `venv`, no `GUDHI`. Just `uv` + `numpy`.
 | Persistence barcode → CSV | `tools/barcodes.py` |
 | Feature selection + dimensionality reduction (PCA / UMAP / t-SNE) | `tools/project.py` |
 | Compare persistent "attractor" features across many clouds | `tools/attractors.py` |
-| Plots (Betti function, barcode, 2D cloud) with **matplotlib** | `tools/plot.py` |
+| Plots (Betti function, persistence summary = barcode + diagram, 2D cloud) with **matplotlib** | `tools/plot.py` |
 | Generate synthetic ground-truth (circle, torus T^k, donut, sphere) | `tools/make_torus.py` |
 | Load the bundled transformer data + run TDA | `tools/load_smoke.py`, `examples/attractor_analysis.py` |
 | Run the test suite (170 tests) | `tools/run_tests.py` |
