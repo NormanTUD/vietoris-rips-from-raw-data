@@ -189,7 +189,7 @@ uv run tools/attractors.py --csvs groupA.csv groupB.csv --max-dim 2 --out compar
 uv run tools/attractors.py --layers 0 16 32 48 64 --max-dim 2
 ```
 
-### `plot.py` — matplotlib plots (Betti function, barcode, 2D cloud)
+### `plot.py` — matplotlib plots (Betti function, persistence summary, 2D cloud)
 
 ```bash
 # plots are ready out of the box (matplotlib is declared in plot.py's header)
@@ -197,9 +197,16 @@ uv run tools/plot.py --points mydata.csv --value-cols x y --out-dir plots/
 
 # cosine metric, custom title
 uv run tools/plot.py --points torus2.csv --metric cosine --title "2-torus" --out-dir plots/
+
+# drop dim-0 noise and short-lived bars; show more top features per dimension
+uv run tools/plot.py --points mydata.csv --min-dim 1 --min-persistence 0.08 --max-bars 16 --out-dir plots/
 ```
 
- Produces `plots/betti.png`, `plots/barcode.png`, `plots/cloud.png`.
+ Produces `plots/betti.png`, `plots/barcode.png`, `plots/cloud.png`. `barcode.png` is a
+**two-panel persistence summary**: a compact barcode (dims ≥ `--min-dim`, sorted by
+persistence, noise filtered by `--min-persistence`, at most `--max-bars` per dim) on the
+left, and the full birth–death **persistence diagram** on the right. This keeps the figure
+legible even for high-dim clouds that yield hundreds of short-lived dim-0 components.
 
 ### `methods.py` — the selectable attractor-method suite  ⭐
 
