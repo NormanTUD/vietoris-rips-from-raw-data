@@ -22,12 +22,15 @@ No `venv`, no `GUDHI`. Just `uv` + `numpy`.
 | Plots (Betti function, barcode, 2D cloud) with **matplotlib** | `tools/plot.py` |
 | Generate synthetic ground-truth (circle, torus T^k, donut, sphere) | `tools/make_torus.py` |
 | Load the bundled transformer data + run TDA | `tools/load_smoke.py`, `examples/attractor_analysis.py` |
-| Run the test suite (121 tests) | `tools/run_tests.py` |
+| Run the test suite (170 tests) | `tools/run_tests.py` |
 
 Under the hood (`vrtda/` package):
 `pointset`, `metrics`, `distances`, `geometry` (min-enclosing-ball), `complexes`
 (Rips + Vietoris), `persistence` (GF(2) row-echelon), `homology`, `cohomology`,
-`barcodes`, `generators`, `datasets`, `reduction`, `attractors`, `reports`, `plotting`.
+`barcodes`, `generators`, `datasets`, `reduction`, `attractors`, `persistence_metrics`,
+`distance` (bottleneck/Wasserstein), `cocycles`, `depth_persistence`, `mapper`,
+`dynamics`, `reports`, `plotting` — every public function fully type-hinted and
+runtime-checked (see **Runtime type checking** below).
 
 See **`docs/MATH.md`** for the formal math and references, and **`docs/PLAN.md`** for the roadmap.
 
@@ -43,6 +46,37 @@ See **`docs/MATH.md`** for the formal math and references, and **`docs/PLAN.md`*
 Every script is a [PEP 723](https://peps.python.org/pep-0723/) file: it declares its own
 dependencies in the `# /// script` header, so `uv run` builds a cached, isolated
 environment for it — no manual setup, no reinstall between runs.
+
+---
+
+## Runtime type checking (beartype, always on)
+
+Every function in the library **and** in the tools/examples carries full type
+hints, and **every one of them is checked at runtime** by
+[beartype](https://beartype.readthedocs.io/). This is a hard contract, not an
+opt-in feature:
+
+- Each `vrtda` module wraps itself at load time
+  (`vrtda/beartype_guard.py` → `beartype_module(__name__)`), covering all
+  module-level functions, class methods **and** `@property` getters.
+- There is **no flag, env var or argument to disable it** — type checking is
+  part of the package's behaviour.
+- A mis-typed call fails fast with a `BeartypeCallHint…Violation` pointing at the
+  offending parameter/return, instead of producing wrong numbers silently.
+- The one deliberate relaxation is the **PEP 484 numeric tower**: an `int` is
+  accepted wherever a `float` is expected (e.g. `p_wasserstein(..., p=2)`),
+  matching how the numeric API is actually called. `int` returns stay strict, and
+  non-numeric types are always rejected.
+- `beartype` is therefore a declared dependency in every PEP 723 header
+  (`numpy`, `pytest`, `beartype`), so it is always present when the code runs.
+
+You can see it working:
+
+```bash
+uv run tools/run_tests.py   # the suite exercises the checked paths
+# any call that violates a hint raises immediately:
+#   BeartypeCallHintParamViolation: … parameter X=… violates type hint …
+```
 
 ---
 
@@ -252,6 +286,23 @@ The suite validates the whole algebra on exact ground truth: abstract complexes
 (disk, sphere, solid tetrahedron, T², T³) give exact Betti numbers with
 homology = cohomology = barcode, and point clouds (S¹, T², T³) recover the correct
 loop counts.
+
+---
+
+## Continuous integration
+
+A GitHub Actions workflow (`.github/workflows/ci.yml`) runs the **full test suite on
+every push and pull request**. It installs `uv`, then runs the suite in two
+environments:
+
+1. the base environment (`numpy` + `pytest` + `beartype`), and
+2. a plotting environment (`+ matplotlib`) so the matplotlib-gated tests run too.
+
+Both must pass for the check to go green. Locally the exact same command is:
+
+```bash
+uv run tools/run_tests.py
+```
 
 ---
 
