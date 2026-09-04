@@ -154,7 +154,7 @@ class PointSet:
         d = self.dim
         header = [f"{header_prefix}{i:04d}" for i in range(d)]
         with open(path, "w", newline="") as fh:
-            w = csv.writer(fh)
+            w = csv.writer(fh, lineterminator="\n")
             w.writerow(header)
             for row in self.data:
                 w.writerow([f"{v:.9g}" for v in row])
