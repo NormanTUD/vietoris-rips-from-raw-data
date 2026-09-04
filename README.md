@@ -20,6 +20,7 @@ No `venv`, no `GUDHI`. Just `uv` + `numpy`.
 | Feature selection + dimensionality reduction (PCA / UMAP / t-SNE) | `tools/project.py` |
 | Compare persistent "attractor" features across many clouds | `tools/attractors.py` |
 | Plots (Betti function, persistence summary = barcode + diagram, 2D cloud) with **matplotlib** | `tools/plot.py` |
+| **Interactive HTML** — drag an ε-slider / ▶ Play to watch the Rips complex grow with **live β₀/β₁/β₂**, a persistence diagram and the Betti curve (3D, drag-to-rotate) | `tools/interactive.py` |
 | Generate synthetic ground-truth (circle, torus T^k, donut, sphere) | `tools/make_torus.py` |
 | Load the bundled transformer data + run TDA | `tools/load_smoke.py`, `examples/attractor_analysis.py` |
 | Run the test suite (170 tests) | `tools/run_tests.py` |
