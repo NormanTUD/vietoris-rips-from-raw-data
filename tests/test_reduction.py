@@ -1,11 +1,14 @@
+from __future__ import annotations
+
 import numpy as np
 import pytest
 
 from vrtda import reduction as R
+from vrtda.beartype_guard import beartype_module
 from vrtda.errors import DataError
 
 
-def test_pca_finds_dominant_axis():
+def test_pca_finds_dominant_axis() -> None:
     rng = np.random.default_rng(0)
     base = rng.normal(size=(2000, 2))
     X = base @ np.array([[10.0, 0.0], [0.0, 1.0]])  # stretch x
@@ -18,7 +21,7 @@ def test_pca_finds_dominant_axis():
     assert scores[:, 0].var() > scores[:, 1].var() * 50
 
 
-def test_pca_collinear_rank1():
+def test_pca_collinear_rank1() -> None:
     t = np.linspace(0, 1, 50).reshape(-1, 1)
     X = np.hstack([t, 2 * t + 0.5, -3 * t])  # rank 1 (affine)
     scores, comps, evr, _ = R.pca(X, n_components=3)
@@ -26,7 +29,7 @@ def test_pca_collinear_rank1():
     assert evr[1] < 1e-9
 
 
-def test_pca_explained_variance_matches_eigenvalues():
+def test_pca_explained_variance_matches_eigenvalues() -> None:
     rng = np.random.default_rng(1)
     C = np.array([[4.0, 2.0], [2.0, 3.0]])
     X = rng.multivariate_normal([0.0, 0.0], C, size=20000)
@@ -41,7 +44,7 @@ def test_pca_explained_variance_matches_eigenvalues():
         assert np.isclose(v @ v, 1.0, atol=1e-9)
 
 
-def test_pca_mean_and_scores_shape():
+def test_pca_mean_and_scores_shape() -> None:
     rng = np.random.default_rng(2)
     X = rng.normal(size=(30, 4))
     scores, comps, evr, mean = R.pca(X, n_components=3)
@@ -55,7 +58,7 @@ def test_pca_mean_and_scores_shape():
     assert evr.max() <= 1.0 + 1e-12
 
 
-def test_variance_of_and_top_dims():
+def test_variance_of_and_top_dims() -> None:
     X = np.array([[1.0, 10.0, 2.0], [2.0, 12.0, 5.0], [0.0, 8.0, 4.0], [1.0, 11.0, 3.0]])
     var = R.variance_of(X)
     # variances: dim0=[1,2,0,1]->0.5, dim1=[10,12,8,11]->2.1875, dim2=[2,5,4,3]->1.25
@@ -65,13 +68,13 @@ def test_variance_of_and_top_dims():
     assert var[order[0]] == var.max()
 
 
-def test_top_variance_dims_bounds():
+def test_top_variance_dims_bounds() -> None:
     X = np.random.default_rng(3).normal(size=(5, 4))
     assert R.top_variance_dims(X, 0) == []
     assert R.top_variance_dims(X, 99) == list(range(4))
 
 
-def test_reduce_dispatch_pca():
+def test_reduce_dispatch_pca() -> None:
     X = np.random.default_rng(4).normal(size=(20, 5))
     out, meta = R.reduce(X, "pca", n_components=2)
     assert out.shape == (20, 2)
@@ -79,14 +82,17 @@ def test_reduce_dispatch_pca():
     assert len(meta["explained_variance_ratio"]) == 2
 
 
-def test_reduce_unknown_method():
+def test_reduce_unknown_method() -> None:
     X = np.random.default_rng(5).normal(size=(5, 3))
     with pytest.raises(DataError):
         R.reduce(X, "nope")
 
 
-def test_reduce_pca_equals_direct():
+def test_reduce_pca_equals_direct() -> None:
     X = np.random.default_rng(6).normal(size=(15, 6))
     out, _ = R.reduce(X, "pca", n_components=3)
     scores, _, _, _ = R.pca(X, n_components=3)
     np.testing.assert_allclose(out, scores, atol=1e-12)
+
+
+beartype_module(__name__)
