@@ -23,6 +23,10 @@ def _lp_matrix(A: np.ndarray, B: np.ndarray, p: float) -> np.ndarray:
     return np.sum(d**p, axis=2) ** (1.0 / p)
 
 
+def _linf_matrix(A: np.ndarray, B: np.ndarray) -> np.ndarray:
+    return np.max(np.abs(A[:, None, :] - B[None, :, :]), axis=2)
+
+
 def _edmonds_karp(N: int, adj: list, s: int, t: int) -> int:
     flow = 0
     while True:
@@ -65,7 +69,7 @@ def _bottleneck_feasible(P: np.ndarray, Q: np.ndarray, v: float) -> bool:
     n1, n2 = len(P), len(Q)
     if n1 == 0 and n2 == 0:
         return True
-    LINF = _lp_matrix(P, Q, float("inf"))
+    LINF = _linf_matrix(P, Q)
     hP = (P[:, 1] - P[:, 0]) / 2.0  # L_inf height
     hQ = (Q[:, 1] - Q[:, 0]) / 2.0
     S, T = n1 + n2, n1 + n2 + 1
@@ -119,7 +123,7 @@ def bottleneck(bc1: Barcode, bc2: Barcode, dim: int = 1) -> float:
     if len(Q):
         cands.update(((Q[:, 1] - Q[:, 0]) / 2.0).tolist())
     if len(P) and len(Q):
-        cands.update(_lp_matrix(P, Q, float("inf")).ravel().tolist())
+        cands.update(_linf_matrix(P, Q).ravel().tolist())
     for vv in sorted(cands):
         if _bottleneck_feasible(P, Q, vv):
             return float(vv)
