@@ -1,9 +1,12 @@
+from __future__ import annotations
+
 import os
 import sys
 import time
+from collections.abc import Iterator
 from contextlib import contextmanager
 
-_RUNTIME = {"enabled": None}
+_RUNTIME: dict[str, bool | None] = {"enabled": None}
 
 
 def _env_enabled() -> bool:
