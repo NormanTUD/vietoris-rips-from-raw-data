@@ -163,7 +163,7 @@ def cmd_depth(args):
             c = sorted(long, key=lambda c: -c.length)[0]
             L = c.layers()[0]
             ps = datasets.load_token_cloud(args.data_dir, L)
-            xy = pca(ps.data, 2)
+            xy = pca(ps.data, 2)[0]
             idx = [ps.labels.index(t) for t in c.per_layer_tokens[L] if t in ps.labels]
             _try_plot("plot_attractor_overlay", xy, [idx] if len(idx) >= 2 else [],
                       args.plot + ".overlay.png", title=f"attractor layers {c.span} @ L{L}")
