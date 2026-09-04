@@ -118,7 +118,7 @@ class PointSet:
         return cls(data, labels=labels, meta=meta, name=name)
 
     # ---- transforms -------------------------------------------------------
-    def select_dims(self, dims, name=None) -> "PointSet":
+    def select_dims(self, dims: Sequence[int], name: str | None = None) -> "PointSet":
         dims = list(dims)
         for k in dims:
             assert 0 <= k < self.dim, f"dim index {k} out of range [0,{self.dim})"
@@ -130,7 +130,7 @@ class PointSet:
             name=name or f"{self.name}[dims={dims}]",
         )
 
-    def select_rows(self, idx, name=None) -> "PointSet":
+    def select_rows(self, idx: Sequence[int], name: str | None = None) -> "PointSet":
         idx = list(idx)
         data = self.data[idx]
         labels = [self.labels[i] for i in idx]
@@ -155,7 +155,7 @@ class PointSet:
                         name=f"{self.name}:{method}")
 
     # ---- io / stats -------------------------------------------------------
-    def to_csv(self, path, header_prefix="dim_") -> Path:
+    def to_csv(self, path: str | Path, header_prefix: str = "dim_") -> Path:
         path = Path(path)
         path.parent.mkdir(parents=True, exist_ok=True)
         d = self.dim
@@ -167,7 +167,7 @@ class PointSet:
                 w.writerow([f"{v:.9g}" for v in row])
         return path
 
-    def stats(self) -> dict:
+    def stats(self) -> dict[str, int | float]:
         x = self.data
         norms = np.linalg.norm(x, axis=1)
         return {
@@ -187,3 +187,8 @@ def verify_pointset(ps: PointSet) -> None:
     assert ps.n == len(ps.labels)
     assert np.all(np.isfinite(ps.data))
     debug.assert_debug(ps.dim >= 1, "PointSet has zero dims")
+
+
+from vrtda.beartype_guard import beartype_module as _beartype_module
+
+_beartype_module(__name__)
