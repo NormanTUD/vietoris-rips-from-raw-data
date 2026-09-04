@@ -83,6 +83,8 @@ def test_donut_grid_annulus():
 
 def test_product_torus_grid_is_grid():
     x = G.product_torus_grid(2, 5)
-    # x-coord is cos of a 5-point grid -> at most 5 distinct values (grid structure)
+    # x-coord is cos of a 5-point grid; due to cos symmetry there are <= 5 distinct values
+    assert x.shape == (25, 4)
     assert len(np.unique(np.round(x[:, 0], 6))) <= 5
-    assert len(np.unique(np.round(x[:, 0], 6))) >= 4
+    # all x-values lie on the unit circle grid (radius 1)
+    np.testing.assert_allclose(np.sqrt(x[:, 0] ** 2 + x[:, 1] ** 2), 1.0, atol=1e-9)
