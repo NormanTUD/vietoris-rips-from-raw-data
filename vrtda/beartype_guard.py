@@ -44,15 +44,15 @@ def beartype_module(module: Any) -> None:
     """
     for _name, obj in list(vars(module).items()):
         if isinstance(obj, types.FunctionType) and getattr(obj, "__module__", None) == module.__name__:
-            setattr(module, _name, _wrap_once(obj))
+            setattr(module, _name, beartype_function(obj))
         elif inspect.isclass(obj) and getattr(obj, "__module__", None) == module.__name__:
             for mname, mobj in list(vars(obj).items()):
                 if isinstance(mobj, types.FunctionType) and not mname.startswith("__"):
-                    setattr(obj, mname, _wrap_once(mobj))
+                    setattr(obj, mname, beartype_function(mobj))
 
 
 def is_wrapped(func: Any) -> bool:
-    """True if ``func`` has been wrapped by :func:`_wrap_once`."""
+    """True if ``func`` has been wrapped by :func:`beartype_function`."""
     return bool(getattr(func, "__vrtda_beartyped__", False))
 
 
