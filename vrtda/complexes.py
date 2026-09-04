@@ -1,22 +1,24 @@
 from __future__ import annotations
 
+from collections.abc import Callable, Iterable, Sequence
 from itertools import combinations, permutations
 
 import numpy as np
 
 from vrtda import debug
 from vrtda import geometry as G
+from vrtda.beartype_guard import beartype_function
 from vrtda.errors import FiltrationError, TooLargeError
 
 
 class FilteredComplex:
     def __init__(
         self,
-        simplexes: list[tuple],
+        simplexes: list[tuple[int, ...]],
         values: np.ndarray,
         dims: np.ndarray,
         kind: str,
-        params: dict,
+        params: dict[str, object],
     ) -> None:
         self.simplexes = simplexes
         self.values = np.asarray(values, dtype=np.float64)
@@ -41,8 +43,8 @@ class FilteredComplex:
                     )
 
     @staticmethod
-    def _faces_of(s: tuple) -> list[tuple]:
-        faces = []
+    def _faces_of(s: tuple[int, ...]) -> list[tuple[int, ...]]:
+        faces: list[tuple[int, ...]] = []
         for a in range(len(s)):
             face = s[:a] + s[a + 1:]
             if len(face) >= 1:
@@ -59,7 +61,7 @@ class FilteredComplex:
     def max_dim(self) -> int:
         return int(self.dims.max()) if len(self.dims) else -1
 
-    def index_of(self, s: tuple) -> int:
+    def index_of(self, s: tuple[int, ...]) -> int:
         return self._index[s]
 
     def boundary_faces(self, j: int) -> list[int]:
@@ -73,7 +75,7 @@ class FilteredComplex:
     def boundary_columns(self) -> list[set[int]]:
         return [set(self.boundary_faces(j)) for j in range(self.n_simplices)]
 
-    def summary(self) -> dict:
+    def summary(self) -> dict[str, object]:
         return {
             "kind": self.kind,
             "params": self.params,
@@ -88,11 +90,20 @@ class FilteredComplex:
         return f"FilteredComplex(kind={self.kind}, n={self.n_simplices}, counts={c})"
 
     @classmethod
-    def from_explicit(cls, simplices, kind: str = "explicit", params: dict | None = None) -> "FilteredComplex":
+    def from_explicit(
+        cls,
+        simplices: Iterable[tuple[int, ...]],
+        kind: str = "explicit",
+        params: dict[str, object] | None = None,
+    ) -> "FilteredComplex":
         return _sort_and_build(list(simplices), kind, params or {})
 
 
-def _sort_and_build(simplexes: list[tuple], kind: str, params: dict) -> FilteredComplex:
+def _sort_and_build(
+    simplexes: list[tuple[float, int, tuple[int, ...]]],
+    kind: str,
+    params: dict[str, object],
+) -> FilteredComplex:
     simplexes = sorted(simplexes, key=lambda t: (t[0], t[1], t[2]))
     values = np.array([t[0] for t in simplexes], dtype=np.float64)
     dims = np.array([t[1] for t in simplexes], dtype=np.int64)
@@ -105,8 +116,8 @@ def _enumerate_cliques(
     D: np.ndarray,
     max_dim: int,
     max_simplices: int,
-    value_fn,
-) -> list[tuple]:
+    value_fn: Callable[[tuple[int, ...]], float],
+) -> list[tuple[float, int, tuple[int, ...]]]:
     n = A.shape[0]
     out: list[tuple] = [(0.0, 0, (i,)) for i in range(n)]
     if max_simplices and len(out) > max_simplices:
