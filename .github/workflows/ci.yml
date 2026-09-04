@@ -1,0 +1,33 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    name: tests (${{ matrix.env }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - env: base
+            extra: ""
+          - env: plotting
+            extra: "--with matplotlib"
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        run: curl -LsSf https://astral.sh/uv/install.sh | sh
+
+      - name: Add uv to PATH
+        run: echo "${HOME}/.local/bin" >> "${GITHUB_PATH}"
+
+      - name: Show uv version
+        run: uv --version
+
+      - name: Run test suite (beartype always on)
+        run: uv run ${{ matrix.extra }} tools/run_tests.py
