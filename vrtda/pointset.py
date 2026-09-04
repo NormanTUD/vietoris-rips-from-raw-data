@@ -118,7 +118,7 @@ class PointSet:
         return cls(data, labels=labels, meta=meta, name=name)
 
     # ---- transforms -------------------------------------------------------
-    def select_dims(self, dims: Sequence[int], name: str | None = None) -> "PointSet":
+    def select_dims(self, dims: Sequence[int] | np.ndarray, name: str | None = None) -> "PointSet":
         dims = list(dims)
         for k in dims:
             assert 0 <= k < self.dim, f"dim index {k} out of range [0,{self.dim})"
@@ -130,7 +130,7 @@ class PointSet:
             name=name or f"{self.name}[dims={dims}]",
         )
 
-    def select_rows(self, idx: Sequence[int], name: str | None = None) -> "PointSet":
+    def select_rows(self, idx: Sequence[int] | np.ndarray, name: str | None = None) -> "PointSet":
         idx = list(idx)
         data = self.data[idx]
         labels = [self.labels[i] for i in idx]

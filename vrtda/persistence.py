@@ -52,7 +52,7 @@ class Barcode:
             out.append(sum(1 for iv in self.of_dim(d) if iv.alive_at(eps)))
         return out
 
-    def betti_function(self, epsilons: Sequence[float]) -> np.ndarray:
+    def betti_function(self, epsilons: Sequence[float] | np.ndarray) -> np.ndarray:
         epsilons = list(epsilons)
         md = self.max_dim()
         arr = np.zeros((len(epsilons), md + 1), dtype=np.int64)

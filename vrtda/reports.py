@@ -55,7 +55,7 @@ class Report:
         return path
 
 
-def betti_table(epsilons: Sequence[float], betti_arr: np.ndarray) -> tuple[list[str], list[list[int | float]]]:
+def betti_table(epsilons: Sequence[float] | np.ndarray, betti_arr: np.ndarray) -> tuple[list[str], list[list[int | float]]]:
     """Turn a betti_function array (n_eps x (md+1)) into table headers/rows."""
     betti_arr = np.asarray(betti_arr)
     md = betti_arr.shape[1] - 1

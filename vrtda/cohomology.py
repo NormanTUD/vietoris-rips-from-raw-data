@@ -41,7 +41,7 @@ def cohomology_at(complex: FilteredComplex, eps: float) -> list[int]:
     return out
 
 
-def cohomology_function(complex: FilteredComplex, epsilons: Sequence[float]) -> np.ndarray:
+def cohomology_function(complex: FilteredComplex, epsilons: Sequence[float] | np.ndarray) -> np.ndarray:
     epsilons = list(epsilons)
     maxk = int(complex.dims.max()) if complex.n_simplices else 0
     arr = np.zeros((len(epsilons), maxk + 1), dtype=np.int64)
@@ -52,7 +52,7 @@ def cohomology_function(complex: FilteredComplex, epsilons: Sequence[float]) -> 
     return arr
 
 
-def assert_homology_cohomology_match(complex: FilteredComplex, epsilons: Sequence[float]) -> None:
+def assert_homology_cohomology_match(complex: FilteredComplex, epsilons: Sequence[float] | np.ndarray) -> None:
     h = H.betti_function(complex, epsilons)
     c = cohomology_function(complex, epsilons)
     assert h.shape == c.shape

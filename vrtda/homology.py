@@ -61,7 +61,7 @@ def betti_at(complex: FilteredComplex, eps: float) -> list[int]:
     return out
 
 
-def betti_function(complex: FilteredComplex, epsilons: Sequence[float]) -> np.ndarray:
+def betti_function(complex: FilteredComplex, epsilons: Sequence[float] | np.ndarray) -> np.ndarray:
     epsilons = list(epsilons)
     maxk = int(complex.dims.max()) if complex.n_simplices else 0
     arr = np.zeros((len(epsilons), maxk + 1), dtype=np.int64)
