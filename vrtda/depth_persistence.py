@@ -269,7 +269,7 @@ def depth_chains(
     return _match_chains(per_layer, min_overlap, max_gap)
 
 
-def depth_profile(layer_results: dict[int, LayerResult], dim: int = 1) -> dict[int, dict]:
+def depth_profile(layer_results: dict[int, LayerResult], dim: int = 1) -> dict[int, dict[str, int | float]]:
     """Per-layer attractor activity vs depth (scale-free summaries).
 
     For each layer: nn, number of H_d intervals, total H_d persistence, and the
@@ -310,3 +310,8 @@ def stable_core(
     total = total_layers or max((c.length for c in chains), default=1)
     out = [c for c in chains if c.length >= max(1, round(min_layer_fraction * total))]
     return out
+
+
+from vrtda.beartype_guard import beartype_module as _beartype_module
+
+_beartype_module(__name__)

@@ -34,7 +34,7 @@ def _linf_matrix(A: np.ndarray, B: np.ndarray) -> np.ndarray:
     return np.max(np.abs(A[:, None, :] - B[None, :, :]), axis=2)
 
 
-def _edmonds_karp(N: int, adj: list, s: int, t: int) -> int:
+def _edmonds_karp(N: int, adj: list[list[list[int]]], s: int, t: int) -> int:
     flow = 0
     while True:
         parent = [-1] * N  # parent[v] = (u, i) with i = index of forward edge in adj[u]
@@ -63,7 +63,7 @@ def _edmonds_karp(N: int, adj: list, s: int, t: int) -> int:
     return flow
 
 
-def _add_edge(adj: list, u: int, v: int, c: int) -> None:
+def _add_edge(adj: list[list[list[int]]], u: int, v: int, c: int) -> None:
     if c <= 0:
         return
     adj[u].append([v, c, len(adj[v])])
@@ -174,3 +174,8 @@ def p_wasserstein(bc1: Barcode, bc2: Barcode, dim: int = 1, p: float = 2.0, top_
         r, c = linear_sum_assignment(M)
         w = M[r, c].sum() / 2.0
     return float(w ** (1.0 / p))
+
+
+from vrtda.beartype_guard import beartype_module as _beartype_module
+
+_beartype_module(__name__)
