@@ -18,19 +18,18 @@ def _nearest_neighbor_mean(D):
     return float(d.min(axis=1).mean())
 
 
-def _reaches_beta1(pts, max_dim, target_beta1):
-    """Does there exist an epsilon where the complex is connected (beta_0=1)
-    and beta_1 == target_beta1?"""
+def _reaches_beta1(pts, max_dim, target_beta1, hi=2.0):
+    """Does some epsilon in [0.9*nn, hi*nn] give beta_0=1 and beta_1 == target?"""
     D = pairwise_distances(pts)
     nn = _nearest_neighbor_mean(D)
-    C = build_rips(pts, D, 2.5 * nn, max_dim=max_dim)
+    C = build_rips(pts, D, hi * nn, max_dim=max_dim)
     bc = persistent_homology(C)
-    epsilons = np.linspace(0.9 * nn, 2.0 * nn, 40)
+    epsilons = np.linspace(0.9 * nn, hi * nn, 40)
     for e in epsilons:
         b = bc.betti_at(e)
         if b[0] == 1 and len(b) > 1 and b[1] == target_beta1:
-            return True, float(e)
-    return False, None
+            return True
+    return False
 
 
 def test_abstract_torus2_exact():
@@ -55,21 +54,15 @@ def test_abstract_torus3_exact():
 
 
 def test_point_cloud_circle_recovers_h1():
-    pts = G.circle_grid(24)
-    ok, e = _reaches_beta1(pts, max_dim=2, target_beta1=1)
-    assert ok, "circle: no epsilon with beta0=1 and beta1=1"
+    assert _reaches_beta1(G.circle_grid(24), max_dim=2, target_beta1=1, hi=2.0)
 
 
 def test_point_cloud_torus2_recovers_two_loops():
-    pts = G.product_torus_grid(2, 8)
-    ok, e = _reaches_beta1(pts, max_dim=2, target_beta1=2)
-    assert ok, "T^2: no epsilon with beta0=1 and beta1=2"
+    assert _reaches_beta1(G.product_torus_grid(2, 8), max_dim=2, target_beta1=2, hi=2.0)
 
 
 def test_point_cloud_torus3_recovers_three_loops():
-    pts = G.product_torus_grid(3, 4)
-    ok, e = _reaches_beta1(pts, max_dim=3, target_beta1=3)
-    assert ok, "T^3: no epsilon with beta0=1 and beta1=3"
+    assert _reaches_beta1(G.product_torus_grid(3, 5), max_dim=3, target_beta1=3, hi=1.6)
 
 
 def test_rips_circle_betti_full():

@@ -10,6 +10,7 @@ if ROOT not in sys.path:
 
 import numpy as np
 import vrtda as V
+from vrtda.errors import TooLargeError
 
 
 def nn(D):
@@ -17,24 +18,28 @@ def nn(D):
     return float(d.min(1).mean())
 
 
-def probe(name, pts, max_dim, n=60, lo=0.9, hi=2.2):
+def probe(name, pts, max_dim, hi, n=40):
     D = V.pairwise_distances(pts); nnn = nn(D)
-    C = V.build_rips(pts, D, hi * nnn, max_dim=max_dim)
+    try:
+        C = V.build_rips(pts, D, hi * nnn, max_dim=max_dim)
+    except TooLargeError as ex:
+        print(f"{name:18s} n={len(pts):3d} TOO_LARGE ({ex})")
+        return
     bc = V.persistent_homology(C)
-    eps = np.linspace(lo * nnn, hi * nnn, n)
-    maxb1 = 0; hit = None
+    eps = np.linspace(0.9 * nnn, hi * nnn, n)
+    seq = []
     for e in eps:
         b = bc.betti_at(e)
         if b[0] == 1:
-            maxb1 = max(maxb1, b[1])
-            if hit is None and len(b) > 1 and b[1] == 3:
-                hit = round(float(e), 4)
-    print(f"{name:20s} n={len(pts):3d} nn={nnn:.4f} maxb1(conn)={maxb1:3d} hit_b1=3_at={hit}")
+            seq.append(b[1])
+    maxb1 = max(seq) if seq else -1
+    hit = 3 in seq
+    print(f"{name:18s} n={len(pts):3d} nsimp={C.n_simplices:5d} nn={nnn:.4f} maxb1(conn)={maxb1:3d} hit_b1=3={hit}")
 
 
 def main():
-    for nper in [3, 4, 5, 6]:
-        probe(f"T3 nper={nper}", V.generators.product_torus_grid(3, nper), 3)
+    for nper in [3, 4, 5]:
+        probe(f"T3 nper={nper}", V.generators.product_torus_grid(3, nper), 3, 1.5)
     print("DONE")
     return 0
 
