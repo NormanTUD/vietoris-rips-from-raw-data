@@ -1,0 +1,70 @@
+# /// script
+# requires-python = ">=3.10"
+# dependencies = ["numpy>=1.26", "matplotlib>=3.7"]
+# ///
+"""Plot Betti function, persistence barcode, and 2D point cloud of a point-cloud CSV.
+
+Produces <out-dir>/betti.png, <out-dir>/barcode.png, <out-dir>/cloud.png.
+Requires matplotlib (already declared in the PEP-723 header above).
+
+Run:
+    uv run tools/plot.py --points mydata.csv --out-dir plots/
+    uv run tools/plot.py --points mydata.csv --value-cols x y --metric cosine
+"""
+import argparse
+import sys
+from pathlib import Path
+
+ROOT = str(Path(__file__).resolve().parents[1])
+if ROOT not in sys.path:
+    sys.path.insert(0, ROOT)
+
+import numpy as np
+
+from vrtda import (
+    PointSet,
+    pairwise_distances,
+    build_rips,
+    persistent_homology,
+    plotting,
+)
+
+
+def _nn(D):
+    d = D.copy(); np.fill_diagonal(d, np.inf)
+    return float(d.min(1).mean())
+
+
+def main() -> int:
+    p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    p.add_argument("--points", required=True, help="point-cloud CSV (one point per row)")
+    p.add_argument("--value-cols", nargs="*", default=None)
+    p.add_argument("--index-cols", nargs="*", default=None)
+    p.add_argument("--metric", default="euclidean")
+    p.add_argument("--max-dim", type=int, default=2)
+    p.add_argument("--frac", type=float, default=1.6, help="eps_max as fraction of mean-nn")
+    p.add_argument("--title", default="")
+    p.add_argument("--out-dir", required=True, help="directory for the PNGs")
+    args = p.parse_args()
+
+    ps = PointSet.from_csv(args.points, value_cols=args.value_cols, index_cols=args.index_cols)
+    D = pairwise_distances(ps.data, args.metric)
+    nn = _nn(D)
+    eps_max = args.frac * nn
+    C = build_rips(ps.data, D, eps_max, max_dim=args.max_dim)
+    bc = persistent_homology(C)
+
+    out = Path(args.out_dir)
+    out.mkdir(parents=True, exist_ok=True)
+    t = args.title or ps.name
+    eps = np.linspace(0.9 * nn, eps_max, 16)
+    arr = bc.betti_function(list(eps))
+    plotting.plot_betti_function(eps, arr, out / "betti.png", title=f"Betti function — {t}")
+    plotting.plot_barcode(bc.intervals, out / "barcode.png", title=f"Persistence barcode — {t}")
+    plotting.plot_point_cloud_2d(ps.data, out / "cloud.png", labels=ps.labels, title=f"Point cloud — {t}")
+    print(f"wrote {out}/betti.png, barcode.png, cloud.png (n={ps.n}, dim={ps.dim})")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

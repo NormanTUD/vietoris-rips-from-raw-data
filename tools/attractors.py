@@ -49,7 +49,7 @@ def collect_clouds(args):
             clouds[f"layer_{int(L):03d}"] = ps.data
     if args.csvs:
         for c in args.csvs:
-            ps = PointSet.from_csv(c)
+            ps = PointSet.from_csv(c, value_cols=args.value_cols, index_cols=args.index_cols)
             clouds[Path(c).stem] = ps.data
     if args.source == "residual_norms":
         mat, labels = datasets.load_residual_matrix(kind=args.kind)
@@ -61,6 +61,8 @@ def main() -> int:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--layers", type=int, nargs="*", default=None, help="layer indices for token-cloud comparison")
     p.add_argument("--csvs", nargs="*", default=None, help="point-cloud CSVs to compare")
+    p.add_argument("--value-cols", nargs="*", default=None, help="numeric columns (for --csvs; default: all non-index)")
+    p.add_argument("--index-cols", nargs="*", default=None, help="label columns (for --csvs)")
     p.add_argument("--source", choices=["residual_norms"], default=None)
     p.add_argument("--kind", default="norms", choices=["norms", "cosines", "deltas"])
     p.add_argument("--metric", default="euclidean")
