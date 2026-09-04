@@ -234,7 +234,69 @@ Punkt-Clouds (robuste Loop-Erkennung, `∃ ε : β_0=1 ∧ β_1=Ziel`):
 | T^3 (S^1)^3               | 3        | OK     |
 
 > **Ehrliche Einschränkung:** Der Rips-Komplex einer *dicht* abgetasteten 2D/3D-
-> Oberfläche erzeugt auf mittleren Skalen viel *spurioses* Top-Homologie (viele kurze
-> H_2/H_3-Intervalle). Die **essentialen**/langlebigen Features und `β_1` bleiben
-> robust; die exakten Top-Betti-Zahlen (`β_k`) validieren wir deshalb über **abstrakte**
-> Torus-Grids, nicht über dichte Punkt-Clouds. Das ist Standard-TDA-Verhalten, kein Bug.
+ > Oberfläche erzeugt auf mittleren Skalen viel *spurioses* Top-Homologie (viele kurze
+ > H_2/H_3-Intervalle). Die **essentialen**/langlebigen Features und `β_1` bleiben
+ > robust; die exakten Top-Betti-Zahlen (`β_k`) validieren wir deshalb über **abstrakte**
+ > Torus-Grids, nicht über dichte Punkt-Clouds. Das ist Standard-TDA-Verhalten, kein Bug.
+
+---
+
+## 8. Persistenz-Metriken
+
+Für ein Barcode mit Persistenzwerten `a_1 ≥ a_2 ≥ … > 0` (`a_i = t_death − t_birth`):
+
+- **Entropie** (de Silva, Mémoli & Glaser, 2011):
+  `H = −Σ_i p_i log_b p_i` mit `p_i = a_i / Σ_j a_j`. Klein = wenige dominante Features,
+  maximal `log_b n` = viele vergleichbare Features.
+- **Landscape** (Cohen & Stein, 2013): Zelte `Φ_i(x) = [a_i − |x − i|]₊`; die Folge
+  `F_j(x) = max_{i ≥ j} Φ_i(x)` (nicht-steigend in `j`, `F_0` = oberes Envelope) ist eine
+  stabile Signatur; die Differenzen `F_j − F_{j+1}` rekonstruieren die Zelte.
+- **Persistence Image** (Bubenik, 2015): die Off-Diagonal-Punkte `(birth, death)` werden
+  über ein (Gauß-)Kern auf ein Gitter rasterisiert → ein fixes 2D-Array, geeignet als
+  Merkmalsvektor.
+
+## 9. Diagramm-Abstände
+
+Zwei Diagramme sind Multimengen von Punkten im oberen Dreieck; ein Punkt darf zur
+**Diagonale** (Kosten = Abstand zur Diagonale) „entleert" werden.
+
+- **Bottleneck** `d_b`: das `min_φ max` der `L∞`-Verschiebung über alle Matchings `φ`
+  (unmatcht → Diagonale). Wir finden das kleinste `v` per Binärsuche über die Kandidaten
+  (Höhen + paarweisen `L∞`-Abständen) und prüfen Feasibility als **Max-Flow** (Jeweils muss
+  jeder „hohe" Punkt gematcht sein; niedrige dürfen zur Diagonale).
+- **p-Wasserstein** `W_p`: optimaler Transport inkl. Diagonale. Wir verwenden die
+  persdiagram-Kostenmatrix `M` (Größe `n₁+n₂`) mit `M[:n₁,:n₂]=‖P−Q‖_p^p`,
+  `M[:n₁,n₂:]=2h_P^p`, `M[n₁:,:n₂]=2h_Q^p`, `M[n₁:,n₂:]=‖Q−P‖_p^p` und
+  `W_p^p = min_assignment(M) / 2` (Hungarian via `scipy`, sonst Brute-Force für `n ≤ 8`).
+  Hinweis: Da der Diagonal-Kosten selbst `p`-abhängig ist, gilt **nicht** zwingend
+  `W_1 ≤ W_2` — die Monotonie gilt nur für fixen Kosten.
+
+## 10. Persistenz über die Tiefe (Cross-Layer-Attraktoren)
+
+**Beobachtung:** Alle 81 Tokens behalten über die 65 Layer eine fixe Identität
+`label = prompt_idx_token_pos`; nur die Embeddings (und damit die Distanzen) ändern sich.
+Daher ist die Filtration `K(ε, L)` ein **zwei-parameteriges** Filtration auf einem festen
+Simplexraum, und ein Feature, das in aufeinanderfolgenden Layern auftritt, ist ein
+Attraktor, der in der **Tiefe** persistiert.
+
+- **Relativer Maßstab:** Da der Embedding-Radius stark über die Tiefe variiert
+  (nn: 1.5 → ~220 → 99), verwenden wir pro Layer `ε = f · nn(L)`, damit Tiefe vergleichbar ist.
+- **Depth-Chains:** Pro Layer die signifikanten H₁-Loops (top-k nach Persistenz) als
+  Token-Sets extrahieren (siehe §11 Cocycles); benachbarte Layer per Jaccard-Overlap
+  `≥ θ` greedy matchen, mit bis zu `max_gap` übersprungenen Layern. Eine Kette
+  `(L₀ … L₁)` = ein Attraktor über den Tiefen-Span `L₁ − L₀`.
+- **Stable Core:** Ketten, die in ≥ einem Anteil der Tiefe vorkommen.
+- **Heatmap / Profil:** `(f × Layer)`-Betti-Heatmap und pro-Layer-Total-Persistenz
+  zeigen, *wo* in der `(Skala, Tiefe)`-Ebene Attraktoren leben.
+
+## 11. Cocycles (konkrete Loops) und Mapper
+
+- **Cocycle-Basis (k=1):** Kanten in `(value, index)`-Reihenfolge; eine Kante, die zwei
+  bereits verbundene Endpunkte verbindet, schließt den fundamentalen Zyklus
+  `TreePfad(u,v) + Kante`. Der Index der schließenden Kante ist das `birth_simplex` des
+  H₁-Intervalls — die Basis stimmt also exakt mit dem Barcode überein. (Wichtig: der
+  Pfad läuft über die **echten** Wald-Kanten, nicht über Union-Find-Wurzeln.)
+- **Mapper** (Carlsson et al.): Lens `φ : X → ℝ`, überlappende Intervalle; pro Bin der
+  Rips-Komplex der zugehörigen Punkte mit `β₁` als Node-Gewicht; zwei benachbarte Bins
+  sind verbunden, wenn ihre Punkt-Überlappung konnexe ist. Ein 1D-Graph, der die
+  „Form" der Daten entlang der Lens zusammenfasst.
