@@ -55,7 +55,6 @@ def convergence_summary(conv: Convergence, rel: float = 0.2) -> dict:
         "spread_shrink": float(1.0 - md[-1] / md[peak_i]) if md[peak_i] > 0 else 0.0,
         "pairwise_shrink": float(1.0 - mp[-1] / mp.max()) if mp.max() > 0 else 0.0,
         "converged_layer": int(conv.layers[_plateau_index(md, rel)]),
-        "n_final_tokens": int(len(conv.layers)),
     }
 
 
