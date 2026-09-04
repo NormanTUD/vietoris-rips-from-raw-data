@@ -47,9 +47,9 @@ def plot_barcode(intervals: list[Interval], path: str | Path, title: str = "Pers
     """intervals: list of Interval (with .dim, .birth, .death)."""
     plt = _mpl()
     finite = [iv for iv in intervals if np.isfinite(iv.death)]
-    essential = [iv for iv in intervals if not np.isfinite(iv.death)]
     xmax = max([iv.death for iv in finite] + [iv.birth for iv in intervals] + [0.0])
-    fig, ax = plt.subplots(figsize=(8, max(3, 0.4 * len(intervals))))
+    height = min(12.0, max(3.0, 0.18 * max(1, len(intervals))))
+    fig, ax = plt.subplots(figsize=(8, height))
     y = 0
     for iv in sorted(intervals, key=lambda i: (i.dim, i.birth)):
         if np.isfinite(iv.death):
@@ -60,6 +60,102 @@ def plot_barcode(intervals: list[Interval], path: str | Path, title: str = "Pers
     ax.set_yticks([])
     ax.set_xlabel("epsilon")
     ax.set_title(title)
+    fig.tight_layout()
+    fig.savefig(path, dpi=110)
+    plt.close(fig)
+
+
+def plot_persistence_summary(
+    intervals: list[Interval],
+    path: str | Path,
+    title: str = "Persistence summary",
+    min_dim: int = 1,
+    min_persistence_frac: float = 0.05,
+    max_bars: int = 12,
+    eps_max: float | None = None,
+) -> None:
+    """Compact two-panel persistence view for dims >= min_dim.
+
+    Left: a barcode of the most persistent features, grouped by dimension and
+    sorted by persistence (death - birth), with short noise filtered out. This
+    stays legible even when a high-dim point cloud yields hundreds of
+    short-lived dim-0 components (which min_dim=1 drops entirely).
+    Right: the full persistence diagram (birth vs death) with the diagonal.
+    Essential (infinite) intervals are capped at ``eps_max``.
+    """
+    plt = _mpl()
+    ivs = [iv for iv in intervals if iv.dim >= min_dim]
+    if not ivs:
+        fig, ax = plt.subplots(figsize=(6, 3))
+        ax.text(0.5, 0.5, "no features", ha="center", va="center", fontsize=12)
+        ax.set_axis_off()
+        fig.tight_layout()
+        fig.savefig(path, dpi=110)
+        plt.close(fig)
+        return
+
+    if eps_max is None:
+        eps_max = max([iv.death for iv in ivs if np.isfinite(iv.death)] + [iv.birth for iv in ivs] + [0.0])
+    eps_max = float(max(eps_max, 1e-9))
+
+    def cdeath(iv: Interval) -> float:
+        return iv.death if np.isfinite(iv.death) else eps_max
+
+    def pers(iv: Interval) -> float:
+        return cdeath(iv) - iv.birth
+
+    threshold = min_persistence_frac * eps_max
+    dims_present = sorted({iv.dim for iv in ivs})
+
+    # barcode groups: the most persistent features per dimension
+    groups: dict[int, list[Interval]] = {}
+    for dim in dims_present:
+        g = [iv for iv in ivs if iv.dim == dim and pers(iv) >= threshold]
+        g.sort(key=pers, reverse=True)
+        groups[dim] = g[:max_bars]
+    n_bars = sum(len(g) for g in groups.values())
+    height = max(3.5, 0.30 * max(1, n_bars))
+
+    fig, (ax_bar, ax_diag) = plt.subplots(1, 2, figsize=(12, height))
+
+    # --- left: compact barcode ---
+    y = 0
+    ticks: list[tuple[float, str]] = []
+    for dim in dims_present:
+        g = groups.get(dim, [])
+        if not g:
+            continue
+        y0 = y
+        for iv in g:
+            color = "tab:red" if not np.isfinite(iv.death) else "tab:blue"
+            ax_bar.hlines(y, iv.birth, cdeath(iv), color=color, lw=1.6)
+            y += 1
+        ticks.append((y0 + len(g) / 2 - 0.5, f"$H_{dim}$  ({len(g)})"))
+    ax_bar.set_yticks([t for t, _ in ticks])
+    ax_bar.set_yticklabels([lab for _, lab in ticks])
+    ax_bar.set_xlim(0, eps_max)
+    ax_bar.set_xlabel("epsilon")
+    ax_bar.set_title("barcode (top by persistence)")
+    ax_bar.grid(axis="x", alpha=0.25)
+
+    # --- right: persistence diagram ---
+    cmap = plt.cm.tab10
+    for k, dim in enumerate(dims_present):
+        g = [iv for iv in ivs if iv.dim == dim]
+        xs = [iv.birth for iv in g]
+        ys = [cdeath(iv) for iv in g]
+        ax_diag.scatter(xs, ys, s=16, c=cmap(k / 10.0), label=f"$H_{dim}$", edgecolors="k", linewidths=0.3)
+    ax_diag.plot([0, eps_max], [0, eps_max], "k--", lw=0.8, alpha=0.5)
+    ax_diag.set_xlim(0, eps_max)
+    ax_diag.set_ylim(0, eps_max)
+    ax_diag.set_aspect("equal")
+    ax_diag.set_xlabel("birth")
+    ax_diag.set_ylabel("death")
+    ax_diag.set_title("persistence diagram")
+    ax_diag.legend(loc="upper left", fontsize=8)
+    ax_diag.grid(alpha=0.2)
+
+    fig.suptitle(title, fontsize=11)
     fig.tight_layout()
     fig.savefig(path, dpi=110)
     plt.close(fig)

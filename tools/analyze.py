@@ -55,6 +55,8 @@ def main() -> int:
     p.add_argument("--max-dim", type=int, default=2)
     p.add_argument("--frac", type=float, default=1.6, help="eps_max as fraction of mean nearest-neighbour distance")
     p.add_argument("--min-fraction", type=float, default=0.1, help="long-lived threshold (fraction of eps_max)")
+    p.add_argument("--min-dim", type=int, default=1, help="plots: only show homology dims >= this (1 = drop dim-0 noise)")
+    p.add_argument("--min-persistence", type=float, default=0.05, help="plots: drop barcode bars shorter than this fraction of eps_max")
     p.add_argument("--out-dir", required=True, help="output directory")
     p.add_argument("--plots", action="store_true", help="also save PNG plots (requires matplotlib)")
     args = p.parse_args()
@@ -107,7 +109,10 @@ def main() -> int:
         try:
             from vrtda import plotting
             plotting.plot_betti_function(epsilons, arr, out / "betti.png", title="Betti function")
-            plotting.plot_barcode(bc.intervals, out / "barcode.png", title="Persistence barcode")
+            plotting.plot_persistence_summary(
+                bc.intervals, out / "barcode.png", title="Persistence summary",
+                min_dim=args.min_dim, min_persistence_frac=args.min_persistence, eps_max=eps_max,
+            )
             plotting.plot_point_cloud_2d(ps.data, out / "cloud.png", labels=ps.labels, title="Point cloud")
         except Exception as e:
             print(f"[warn] plotting skipped: {e}")
