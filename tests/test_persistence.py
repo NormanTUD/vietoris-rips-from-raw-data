@@ -1,23 +1,26 @@
+from __future__ import annotations
+
 import numpy as np
 import pytest
 
 from vrtda import FilteredComplex, persistent_homology
+from vrtda.beartype_guard import beartype_module
 
 
-def two_points_edge():
+def two_points_edge() -> FilteredComplex:
     return FilteredComplex.from_explicit([
         (0.0, 0, (0,)), (0.0, 0, (1,)), (2.0, 1, (0, 1)),
     ])
 
 
-def triangle_cycle():
+def triangle_cycle() -> FilteredComplex:
     return FilteredComplex.from_explicit([
         (0.0, 0, (0,)), (0.0, 0, (1,)), (0.0, 0, (2,)),
         (1.0, 1, (0, 1)), (1.0, 1, (1, 2)), (1.0, 1, (2, 0)),
     ])
 
 
-def test_two_points_edge_barcodes():
+def test_two_points_edge_barcodes() -> None:
     bc = persistent_homology(two_points_edge())
     h0 = sorted((iv.birth, iv.death) for iv in bc.of_dim(0))
     # one component born at 0 infinite, one born at 0 killed at 2
@@ -25,7 +28,7 @@ def test_two_points_edge_barcodes():
     assert bc.of_dim(1) == []
 
 
-def test_triangle_cycle_barcodes():
+def test_triangle_cycle_barcodes() -> None:
     bc = persistent_homology(triangle_cycle())
     h0 = bc.of_dim(0)
     h1 = bc.of_dim(1)
@@ -41,7 +44,7 @@ def test_triangle_cycle_barcodes():
     assert h1[0].birth == 1.0
 
 
-def test_interval_alive_at():
+def test_interval_alive_at() -> None:
     bc = persistent_homology(triangle_cycle())
     loop = bc.of_dim(1)[0]
     assert loop.alive_at(1.0)
@@ -49,20 +52,20 @@ def test_interval_alive_at():
     assert not loop.alive_at(0.5)
 
 
-def test_betti_at_from_barcode():
+def test_betti_at_from_barcode() -> None:
     bc = persistent_homology(triangle_cycle())
     assert bc.betti_at(0.0) == [3, 0]  # 3 isolated points
     assert bc.betti_at(1.0) == [1, 1]  # connected + one loop
     assert bc.betti_at(100.0) == [1, 1]
 
 
-def test_interval_lengths_nonneg():
+def test_interval_lengths_nonneg() -> None:
     bc = persistent_homology(triangle_cycle())
     for iv in bc.intervals:
         assert iv.death >= iv.birth - 1e-12
 
 
-def test_torus_grid_essential_counts():
+def test_torus_grid_essential_counts() -> None:
     from vrtda.complexes import make_torus_grid_complex
     C = make_torus_grid_complex(2, (3, 3))
     bc = persistent_homology(C)
@@ -70,7 +73,7 @@ def test_torus_grid_essential_counts():
     assert ess == [1, 2, 1]
 
 
-def test_3torus_essential_counts():
+def test_3torus_essential_counts() -> None:
     from vrtda.complexes import make_torus_grid_complex
     C = make_torus_grid_complex(3, (3, 3, 3))
     bc = persistent_homology(C)
@@ -78,7 +81,7 @@ def test_3torus_essential_counts():
     assert ess == [1, 3, 3, 1]
 
 
-def test_persistence_is_deterministic():
+def test_persistence_is_deterministic() -> None:
     from vrtda import pairwise_distances, build_rips
     from vrtda.generators import circle_grid
     pts = circle_grid(30)
@@ -87,3 +90,6 @@ def test_persistence_is_deterministic():
     b1 = persistent_homology(C)
     b2 = persistent_homology(C)
     assert [iv.as_tuple() for iv in b1.intervals] == [iv.as_tuple() for iv in b2.intervals]
+
+
+beartype_module(__name__)
