@@ -220,3 +220,6 @@ __marimo__/
 # generated outputs (plots / scratch)
 *.png
 *.barcode.csv
+
+out/
+torus2.csv
