@@ -1,6 +1,6 @@
 # /// script
 # requires-python = ">=3.10"
-# dependencies = ["numpy>=1.26", "matplotlib>=3.7"]
+# dependencies = ["numpy>=1.26", "matplotlib>=3.7", "beartype>=0.18"]
 # ///
 """Plot Betti function, persistence barcode, and 2D point cloud of a point-cloud CSV.
 
@@ -28,9 +28,10 @@ from vrtda import (
     persistent_homology,
     plotting,
 )
+from vrtda.beartype_guard import beartype_module
 
 
-def _nn(D):
+def _nn(D: np.ndarray) -> float:
     d = D.copy(); np.fill_diagonal(d, np.inf)
     return float(d.min(1).mean())
 
@@ -64,6 +65,9 @@ def main() -> int:
     plotting.plot_point_cloud_2d(ps.data, out / "cloud.png", labels=ps.labels, title=f"Point cloud — {t}")
     print(f"wrote {out}/betti.png, barcode.png, cloud.png (n={ps.n}, dim={ps.dim})")
     return 0
+
+
+beartype_module(__name__)
 
 
 if __name__ == "__main__":

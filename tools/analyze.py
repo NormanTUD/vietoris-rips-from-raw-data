@@ -1,6 +1,6 @@
 # /// script
 # requires-python = ">=3.10"
-# dependencies = ["numpy>=1.26"]
+# dependencies = ["numpy>=1.26", "beartype>=0.18"]
 # ///
 """One-command TDA analysis of a point-cloud CSV.
 
@@ -37,9 +37,10 @@ from vrtda import (
     attractors,
     reports,
 )
+from vrtda.beartype_guard import beartype_module
 
 
-def _nn(D):
+def _nn(D: np.ndarray) -> float:
     d = D.copy(); np.fill_diagonal(d, np.inf)
     return float(d.min(1).mean())
 
@@ -120,6 +121,9 @@ def main() -> int:
     print(f"wrote: {out}/report.md, barcode.csv, betti_function.csv, attractors.csv"
           + (", betti.png, barcode.png, cloud.png" if args.plots else ""))
     return 0
+
+
+beartype_module(__name__)
 
 
 if __name__ == "__main__":

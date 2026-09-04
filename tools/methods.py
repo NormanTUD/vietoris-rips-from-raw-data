@@ -1,6 +1,6 @@
 # /// script
 # requires-python = ">=3.10"
-# dependencies = ["numpy>=1.26"]
+# dependencies = ["numpy>=1.26", "beartype>=0.18"]
 # ///
 """Unified, selectable CLI for the attractor-analysis methods.
 
@@ -37,6 +37,8 @@ from vrtda import (
     mapper as mapper_mod,
     dynamics as dyn,
 )
+from vrtda.beartype_guard import beartype_function, beartype_module
+from vrtda.persistence import Barcode
 
 METHODS = {
     "metrics": "persistence entropy / landscape / image for a barcode",
@@ -48,7 +50,7 @@ METHODS = {
 METHODS_DYNAMIC = ["convergence", "per_language", "flow", "attention"]
 
 
-def _try_plot(fn, *a, **k):
+def _try_plot(fn: str, *a: object, **k: object) -> object:
     try:
         from vrtda import plotting
 
@@ -57,7 +59,7 @@ def _try_plot(fn, *a, **k):
         print(f"[plot skipped] {e}")
 
 
-def _cloud(args, which):
+def _cloud(args: argparse.Namespace, which: str) -> tuple[str, PointSet]:
     """Return (name, PointSet) from --{which}-layer or --{which}-csv."""
     layer = getattr(args, f"{which}_layer", None)
     csv = getattr(args, f"{which}_csv", None)
@@ -68,7 +70,7 @@ def _cloud(args, which):
     return f"layer_{int(L):03d}", datasets.load_token_cloud(args.data_dir, int(L))
 
 
-def _barcode(pts, metric, max_dim, frac):
+def _barcode(pts: np.ndarray, metric: str, max_dim: int, frac: float) -> tuple[Barcode, float]:
     D = pairwise_distances(pts, metric)
     d = D.copy(); np.fill_diagonal(d, np.inf)
     nn = float(d.min(1).mean())
@@ -76,14 +78,14 @@ def _barcode(pts, metric, max_dim, frac):
     return persistent_homology(C), frac * nn
 
 
-def _default_layers(args):
+def _default_layers(args: argparse.Namespace) -> list[int]:
     if args.layers is not None:
         return args.layers
     all_l = datasets.list_layers(args.data_dir)
     return all_l[:: max(1, len(all_l) // 8)]
 
 
-def cmd_metrics(args):
+def cmd_metrics(args: argparse.Namespace) -> int:
     name, ps = _cloud(args, "a")
     bc, eps_max = _barcode(ps.data, args.metric, args.max_dim, args.frac)
     dim = args.dim
@@ -101,7 +103,7 @@ def cmd_metrics(args):
     return 0
 
 
-def cmd_distance(args):
+def cmd_distance(args: argparse.Namespace) -> int:
     na, pa = _cloud(args, "a")
     nb, pb = _cloud(args, "b")
     bca, _ = _barcode(pa.data, args.metric, args.max_dim, args.frac)
@@ -119,7 +121,7 @@ def cmd_distance(args):
     return 0
 
 
-def cmd_depth(args):
+def cmd_depth(args: argparse.Namespace) -> int:
     layers = _default_layers(args)
     print(f"[depth] layers={layers}  eps_cap_frac={args.eps_cap_frac}  max_dim={args.max_dim}")
     lr = dp.layer_barcodes(args.data_dir, layers=layers, metric=args.metric,
@@ -170,7 +172,7 @@ def cmd_depth(args):
     return 0
 
 
-def cmd_mapper(args):
+def cmd_mapper(args: argparse.Namespace) -> int:
     if args.csv:
         ps = PointSet.from_csv(args.csv, value_cols=args.value_cols, index_cols=args.index_cols)
         name = Path(args.csv).stem
@@ -193,7 +195,7 @@ def cmd_mapper(args):
     return 0
 
 
-def cmd_dynamics(args):
+def cmd_dynamics(args: argparse.Namespace) -> int:
     which = args.which
     if "convergence" in which:
         conv = dyn.convergence(args.data_dir)
@@ -225,7 +227,7 @@ def main() -> int:
     p.add_argument("--data-dir", default=None, help="override the dataset root")
     sub = p.add_subparsers(dest="cmd")
 
-    def common(sp):
+    def common(sp: argparse.ArgumentParser) -> None:
         sp.add_argument("--plot", default=None, help="prefix for PNG output (needs --with matplotlib)")
         sp.add_argument("--metric", default="euclidean")
         sp.add_argument("--max-dim", type=int, default=2)
@@ -233,6 +235,8 @@ def main() -> int:
         sp.add_argument("--dim", type=int, default=1)
         sp.add_argument("--value-cols", nargs="*", default=None)
         sp.add_argument("--index-cols", nargs="*", default=None)
+
+    common = beartype_function(common)
 
     sp = sub.add_parser("metrics", help=METHODS["metrics"])
     common(sp)
@@ -289,6 +293,9 @@ def main() -> int:
             print(f"  {name:10s} {desc}")
         return 0
     return args.fn(args)
+
+
+beartype_module(__name__)
 
 
 if __name__ == "__main__":
