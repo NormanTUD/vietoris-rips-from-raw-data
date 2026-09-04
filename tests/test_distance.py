@@ -1,28 +1,31 @@
+from __future__ import annotations
+
 import math
 
 import pytest
 
+from vrtda.beartype_guard import beartype_module
 from vrtda.persistence import Barcode, Interval
 from vrtda import distance as D
 
 
-def bcd(intervals, dim=1):
+def bcd(intervals: list[tuple[float, float]], dim: int = 1) -> Barcode:
     return Barcode(intervals=[Interval(b, d, dim, i) for i, (b, d) in enumerate(intervals)])
 
 
-def test_empty_vs_empty():
+def test_empty_vs_empty() -> None:
     e = Barcode(intervals=[])
     assert D.bottleneck(e, e, dim=1) == 0.0
     assert D.p_wasserstein(e, e, dim=1, p=2) == 0.0
 
 
-def test_identical_zero():
+def test_identical_zero() -> None:
     a = bcd([(0.0, 2.0), (0.3, 5.0)])
     assert D.bottleneck(a, a, dim=1) == pytest.approx(0.0)
     assert D.p_wasserstein(a, a, dim=1, p=2) == pytest.approx(0.0)
 
 
-def test_single_vs_empty():
+def test_single_vs_empty() -> None:
     a = bcd([(0.0, 5.0)])
     e = Barcode(intervals=[])
     assert D.bottleneck(a, e, dim=1) == pytest.approx(2.5)  # L_inf height = (d-b)/2
@@ -30,7 +33,7 @@ def test_single_vs_empty():
     assert D.p_wasserstein(a, e, dim=1, p=1) == pytest.approx(5.0)  # L1 height = d-b
 
 
-def test_far_apart_go_to_diagonal():
+def test_far_apart_go_to_diagonal() -> None:
     a = bcd([(0.0, 5.0)])
     b = bcd([(10.0, 15.0)])
     # both far apart -> each goes to its own diagonal (bottleneck = max height)
@@ -38,21 +41,21 @@ def test_far_apart_go_to_diagonal():
     assert D.p_wasserstein(a, b, dim=1, p=2) == pytest.approx(5.0)
 
 
-def test_moved_point_prefers_matching():
+def test_moved_point_prefers_matching() -> None:
     a = bcd([(0.0, 1.0)])
     b = bcd([(0.0, 2.0)])
     assert D.bottleneck(a, b, dim=1) == pytest.approx(1.0)
     assert D.p_wasserstein(a, b, dim=1, p=2) == pytest.approx(1.0)
 
 
-def test_symmetry():
+def test_symmetry() -> None:
     a = bcd([(0.0, 1.0), (0.5, 4.0)])
     b = bcd([(0.2, 2.0), (1.0, 5.0)])
     assert D.bottleneck(a, b, dim=1) == pytest.approx(D.bottleneck(b, a, dim=1))
     assert D.p_wasserstein(a, b, dim=1, p=2) == pytest.approx(D.p_wasserstein(b, a, dim=1, p=2))
 
 
-def test_bottleneck_triangle_inequality():
+def test_bottleneck_triangle_inequality() -> None:
     a = bcd([(0.0, 1.0), (0.5, 4.0)])
     b = bcd([(0.2, 2.0), (1.0, 5.0)])
     c = bcd([(0.1, 3.0)])
@@ -62,7 +65,7 @@ def test_bottleneck_triangle_inequality():
     assert d_ac <= d_ab + d_bc + 1e-12
 
 
-def test_wasserstein_triangle_inequality():
+def test_wasserstein_triangle_inequality() -> None:
     a = bcd([(0.0, 1.0), (0.5, 4.0)])
     b = bcd([(0.2, 2.0), (1.0, 5.0)])
     c = bcd([(0.1, 3.0)])
@@ -72,7 +75,7 @@ def test_wasserstein_triangle_inequality():
     assert w_ac <= w_ab + w_bc + 1e-9
 
 
-def test_bottleneck_on_torus_grid():
+def test_bottleneck_on_torus_grid() -> None:
     from vrtda.complexes import make_torus_grid_complex
     from vrtda.persistence import persistent_homology
 
@@ -83,3 +86,6 @@ def test_bottleneck_on_torus_grid():
     e = Barcode(intervals=[])
     vals = [iv for iv in bc.of_dim(1)]
     assert D.bottleneck(bc, e, dim=1) > 0.0
+
+
+beartype_module(__name__)
