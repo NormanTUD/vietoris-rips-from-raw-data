@@ -544,7 +544,6 @@ function renderTrajScene(){
   sctx.lineWidth = 1.1;
   for (let tok=0; tok<N_TOK; tok++){
     const col = groupColor(GROUP[tok]);
-    sctx.strokeStyle = rgba([0,0,0], 0); // (color set per-below)
     sctx.strokeStyle = col; sctx.globalAlpha = 0.30;
     sctx.beginPath();
     let started = false;
