@@ -1,22 +1,25 @@
+from __future__ import annotations
+
 import numpy as np
 import pytest
 
 from vrtda import pairwise_distances, metric_names
+from vrtda.beartype_guard import beartype_module
 from vrtda.errors import MetricError
 
 
-def test_metric_names_present():
+def test_metric_names_present() -> None:
     names = metric_names()
     for m in ["euclidean", "squared", "cosine", "normalized_euclidean", "manhattan"]:
         assert m in names
 
 
-def test_unknown_metric():
+def test_unknown_metric() -> None:
     with pytest.raises(MetricError):
         pairwise_distances(np.ones((3, 2)), metric="nope")
 
 
-def test_euclidean_known():
+def test_euclidean_known() -> None:
     x = np.array([[0.0, 0.0], [3.0, 4.0], [0.0, 1.0]])
     D = pairwise_distances(x, "euclidean")
     assert D.shape == (3, 3)
@@ -26,7 +29,7 @@ def test_euclidean_known():
     np.testing.assert_allclose(np.diag(D), 0.0)
 
 
-def test_symmetry_and_triangle():
+def test_symmetry_and_triangle() -> None:
     rng = np.random.default_rng(0)
     x = rng.normal(size=(50, 7))
     D = pairwise_distances(x, "euclidean")
@@ -36,7 +39,7 @@ def test_symmetry_and_triangle():
         assert D[i, j] <= D[i, k] + D[k, j] + 1e-9
 
 
-def test_squared_is_euclidean_sq():
+def test_squared_is_euclidean_sq() -> None:
     rng = np.random.default_rng(1)
     x = rng.normal(size=(20, 4))
     De = pairwise_distances(x, "euclidean")
@@ -44,7 +47,7 @@ def test_squared_is_euclidean_sq():
     np.testing.assert_allclose(Ds, De ** 2, atol=1e-9)
 
 
-def test_cosine_properties():
+def test_cosine_properties() -> None:
     x = np.array([[1.0, 0.0], [0.0, 1.0], [1.0, 1.0], [2.0, 0.0]])
     D = pairwise_distances(x, "cosine")
     assert D[0, 1] == pytest.approx(1.0)  # orthogonal
@@ -52,7 +55,7 @@ def test_cosine_properties():
     assert D[0, 2] == pytest.approx(1 - 1 / np.sqrt(2))
 
 
-def test_normalized_euclidean_global_scale_invariant():
+def test_normalized_euclidean_global_scale_invariant() -> None:
     rng = np.random.default_rng(2)
     x = rng.normal(size=(15, 6))
     y = x * 3.7  # global positive scaling preserves directions
@@ -61,7 +64,7 @@ def test_normalized_euclidean_global_scale_invariant():
     np.testing.assert_allclose(D1, D2, atol=1e-9)
 
 
-def test_normalized_euclidean_equals_euclidean_on_unit_points():
+def test_normalized_euclidean_equals_euclidean_on_unit_points() -> None:
     # for already-unit-norm points the metric reduces to plain euclidean
     rng = np.random.default_rng(3)
     x = rng.normal(size=(10, 4))
@@ -71,12 +74,15 @@ def test_normalized_euclidean_equals_euclidean_on_unit_points():
     np.testing.assert_allclose(D1, D2, atol=1e-9)
 
 
-def test_manhattan_known():
+def test_manhattan_known() -> None:
     x = np.array([[0.0, 0.0], [1.0, 1.0]])
     D = pairwise_distances(x, "manhattan")
     assert D[0, 1] == pytest.approx(2.0)
 
 
-def test_invalid_input_dim():
+def test_invalid_input_dim() -> None:
     with pytest.raises(Exception):
         pairwise_distances(np.ones(5), "euclidean")
+
+
+beartype_module(__name__)
