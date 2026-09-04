@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from itertools import combinations
+from itertools import combinations, permutations
 
 import numpy as np
 
@@ -225,3 +225,55 @@ def build_vietoris(
         if rad <= r + 1e-12 * max(1.0, r):
             kept.append((rad, d, s))
     return _sort_and_build(kept, "vietoris", {"r": r, "max_dim": max_dim})
+
+
+def make_torus_grid_complex(k: int, cells, name: str = "torus_grid") -> FilteredComplex:
+    if k < 2:
+        raise FiltrationError("torus_grid requires k >= 2")
+    cells = tuple(int(c) for c in cells)
+    if len(cells) != k:
+        raise FiltrationError(f"cells length {len(cells)} != k={k}")
+    if any(c < 2 for c in cells):
+        raise FiltrationError("each cell count must be >= 2")
+
+    def vidx(coord):
+        idx = 0
+        stride = 1
+        for a in range(k):
+            idx += coord[a] * stride
+            stride *= cells[a]
+        return idx
+
+    simp_set: set[tuple] = set()
+
+    def add_simplex(verts: list[tuple]) -> None:
+        if len(verts) < 1:
+            return
+        if len(verts) == 1:
+            s = (vidx(verts[0]),)
+        else:
+            s = tuple(sorted(vidx(v) for v in verts))
+        if len(set(s)) != len(s):
+            return
+        for r in range(1, len(s) + 1):
+            for face in combinations(s, r):
+                simp_set.add(face)
+
+    from itertools import product as _product
+    for o in _product(*[range(c) for c in cells]):
+        o = list(o)
+        for perm in permutations(range(k)):
+            acc = list(o)
+            verts = [tuple(acc)]
+            for a in perm:
+                acc = acc[:]
+                acc[a] = (acc[a] + 1) % cells[a]
+                verts.append(tuple(acc))
+            add_simplex(verts)
+
+    ordered = []
+    for s in simp_set:
+        d = len(s) - 1
+        ordered.append((float(d), d, s))
+    with debug.timing(f"make_torus_grid_complex k={k} cells={cells}"):
+        return _sort_and_build(ordered, "torus_grid", {"k": k, "cells": cells, "name": name})
