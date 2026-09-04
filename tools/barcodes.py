@@ -1,6 +1,6 @@
 # /// script
 # requires-python = ">=3.10"
-# dependencies = ["numpy>=1.26"]
+# dependencies = ["numpy>=1.26", "beartype>=0.18"]
 # ///
 """Compute persistent homology of a point cloud and write barcode + summary CSVs."""
 import argparse
@@ -15,6 +15,7 @@ import numpy as np
 
 from vrtda import PointSet, pairwise_distances, build_rips, persistent_homology
 from vrtda.barcodes import save_barcode_csv, persistence_summary_csv
+from vrtda.beartype_guard import beartype_module
 
 
 def _nn_mean(D: np.ndarray) -> float:
