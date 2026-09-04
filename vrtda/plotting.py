@@ -132,7 +132,7 @@ def plot_persistence_image(img: np.ndarray, path: str | Path, title: str = "Pers
     plt.close(fig)
 
 
-def plot_depth_heatmap(H, fracs, layers, path, title="Betti heatmap (scale x layer)") -> None:
+def plot_depth_heatmap(H: np.ndarray, fracs: np.ndarray, layers: Sequence[int], path: str | Path, title: str = "Betti heatmap (scale x layer)") -> None:
     """H: (n_fracs, n_layers) array of a metric over relative scale x layer."""
     plt = _mpl()
     H = np.asarray(H)
@@ -150,7 +150,7 @@ def plot_depth_heatmap(H, fracs, layers, path, title="Betti heatmap (scale x lay
     plt.close(fig)
 
 
-def plot_betti_over_depth(profile, path, title="Topological activity over depth") -> None:
+def plot_betti_over_depth(profile: dict[int, dict[str, object]], path: str | Path, title: str = "Topological activity over depth") -> None:
     """profile: dict layer -> {total_persistence, beta_peak, ...} from depth_profile."""
     plt = _mpl()
     layers = sorted(profile)
@@ -169,7 +169,7 @@ def plot_betti_over_depth(profile, path, title="Topological activity over depth"
     plt.close(fig)
 
 
-def plot_mapper(g, path, title="Mapper graph") -> None:
+def plot_mapper(g: MapperGraph, path: str | Path, title: str = "Mapper graph") -> None:
     """g: MapperGraph. Nodes placed at the midpoint of their lens interval, sized by beta_1."""
     plt = _mpl()
     mids = [0.5 * (n.interval[0] + n.interval[1]) for n in g.nodes]
@@ -190,7 +190,7 @@ def plot_mapper(g, path, title="Mapper graph") -> None:
     plt.close(fig)
 
 
-def plot_attractor_overlay(pts, loops, path, title="Attractor overlay") -> None:
+def plot_attractor_overlay(pts: np.ndarray, loops: Sequence[Sequence[int]], path: str | Path, title: str = "Attractor overlay") -> None:
     """pts: (n, >=2) array; loops: list of vertex-index sequences (each a cycle)."""
     plt = _mpl()
     pts = np.asarray(pts, dtype=np.float64)
@@ -213,7 +213,7 @@ def plot_attractor_overlay(pts, loops, path, title="Attractor overlay") -> None:
     plt.close(fig)
 
 
-def plot_convergence(conv, path, title="Answer-token convergence over depth") -> None:
+def plot_convergence(conv: Convergence, path: str | Path, title: str = "Answer-token convergence over depth") -> None:
     """conv: Convergence (from dynamics.convergence)."""
     plt = _mpl()
     L = [float(x) for x in conv.layers]
@@ -231,3 +231,8 @@ def plot_convergence(conv, path, title="Answer-token convergence over depth") ->
     fig.tight_layout()
     fig.savefig(path, dpi=110)
     plt.close(fig)
+
+
+from vrtda.beartype_guard import beartype_module as _beartype_module
+
+_beartype_module(__name__)
