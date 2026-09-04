@@ -16,7 +16,7 @@ from vrtda.persistence import persistent_homology, Barcode, Interval
 from vrtda.homology import betti_at, betti_function, gf2_rank
 from vrtda.cohomology import cohomology_at, cohomology_function
 from vrtda.barcodes import save_barcode_csv, load_barcode_csv, persistence_summary_csv
-from vrtda import geometry, generators, distances, metrics, complexes, persistence, homology, cohomology, barcodes
+from vrtda import geometry, generators, distances, metrics, complexes, persistence, homology, cohomology, barcodes, datasets, reduction, attractors
 
 __all__ = [
     "__version__",
@@ -58,4 +58,7 @@ __all__ = [
     "homology",
     "cohomology",
     "barcodes",
+    "datasets",
+    "reduction",
+    "attractors",
 ]
