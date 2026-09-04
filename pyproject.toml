@@ -1,0 +1,11 @@
+[project]
+name = "vietoris-rips-from-raw-data"
+version = "0.1.0"
+description = "Vietoris-Rips persistent-homology TDA toolkit (PEP-723 tools + vrtda package)"
+requires-python = ">=3.10"
+# No [build-system] and no installable packages: uv treats this as a *virtual* project.
+# Its only job is to anchor `uv run` in THIS directory so it does not walk up to an
+# ancestor pyproject.toml. The tools/ and examples/ scripts are self-contained
+# PEP-723 files (they declare their own deps); the vrtda/ package is imported by each
+# tool inserting the repo root onto sys.path -- nothing is pip-installed.
+dependencies = []
