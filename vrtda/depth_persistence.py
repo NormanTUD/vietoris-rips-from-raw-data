@@ -1,25 +1,27 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass, field
+from pathlib import Path
 
 import numpy as np
 
 from vrtda import datasets
-from vrtda.complexes import build_rips
-from vrtda.cocycles import persistent_loops
+from vrtda.complexes import FilteredComplex, build_rips
+from vrtda.cocycles import Loop, persistent_loops
 from vrtda.distances import pairwise_distances
-from vrtda.persistence import persistent_homology
+from vrtda.persistence import Barcode, persistent_homology
 
 
 @dataclass
 class LayerResult:
     layer: int
-    complex: object
-    barcode: object
+    complex: FilteredComplex
+    barcode: Barcode
     nn: float
     eps_max: float
-    labels: list
-    texts: list | None = None
+    labels: list[str]
+    texts: list[str] | None = None
 
     @property
     def scale(self) -> float:
@@ -28,7 +30,7 @@ class LayerResult:
 
 @dataclass
 class AttractorChain:
-    per_layer_tokens: dict = field(default_factory=dict)  # layer -> frozenset of token labels
+    per_layer_tokens: dict[int, frozenset[str]] = field(default_factory=dict)
 
     def layers(self) -> list[int]:
         return sorted(self.per_layer_tokens)
@@ -44,10 +46,10 @@ class AttractorChain:
         return ls[-1] - ls[0] + 1 if ls else 0
 
     @property
-    def tokens(self) -> set:
+    def tokens(self) -> set[str]:
         return set().union(*self.per_layer_tokens.values()) if self.per_layer_tokens else set()
 
-    def describe(self, texts: dict | None = None) -> str:
+    def describe(self, texts: dict[str, str] | None = None) -> str:
         sp = self.span
         if sp is None:
             return "<empty>"
@@ -64,8 +66,8 @@ def _mean_nn(D: np.ndarray) -> float:
 
 
 def layer_barcodes(
-    data_dir=None,
-    layers=None,
+    data_dir: str | Path | None = None,
+    layers: list[int] | None = None,
     metric: str = "euclidean",
     eps_cap_frac: float = 4.0,
     max_dim: int = 2,
@@ -118,7 +120,7 @@ def _total_persistence_at(lr: LayerResult, scale: float, dim: int = 1) -> float:
 
 def betti_heatmap(
     layer_results: dict[int, LayerResult],
-    scale_fracs=None,
+    scale_fracs: Sequence[float] | np.ndarray | None = None,
     dim: int = 1,
     metric: str = "betti",
 ) -> tuple[np.ndarray, np.ndarray, list[int]]:
@@ -205,7 +207,7 @@ def _match_chains(
     return out
 
 
-def _loop_persistence(lp) -> float:
+def _loop_persistence(lp: Loop) -> float:
     return float("inf") if lp.death is None or not np.isfinite(lp.death) else max(0.0, float(lp.death - lp.birth))
 
 
@@ -216,7 +218,7 @@ def _select_loops(
     top_k: int | None = None,
     min_persistence: float | None = None,
     min_persistence_frac: float = 0.0,
-) -> list:
+) -> list[Loop]:
     """H_1 loops of a layer, optionally filtered to the significant ones.
 
     For point clouds almost all H_1 classes are short-lived (holes get filled by
