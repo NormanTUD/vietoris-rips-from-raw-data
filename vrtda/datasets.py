@@ -7,33 +7,33 @@ import numpy as np
 from vrtda import PointSet
 from vrtda.errors import DataError
 
-INDEX_COLS = ["prompt_idx", "token_pos"]
-NORM_KINDS = ("norms", "cosines", "deltas")
+INDEX_COLS: list[str] = ["prompt_idx", "token_pos"]
+NORM_KINDS: tuple[str, ...] = ("norms", "cosines", "deltas")
 
 
 def _data_root() -> Path:
     return Path(__file__).resolve().parents[1] / "capital_berlin_multilingual"
 
 
-def _resolve(data_dir):
+def _resolve(data_dir: str | Path | None) -> Path:
     return Path(data_dir) if data_dir else _data_root()
 
 
-def layer_path(data_dir, layer) -> Path:
+def layer_path(data_dir: str | Path | None, layer: int) -> Path:
     return _resolve(data_dir) / "all_token_streams" / f"layer_{int(layer):03d}.csv"
 
 
-def _header(path) -> list[str]:
+def _header(path: str | Path) -> list[str]:
     import csv
     with open(path, newline="") as fh:
         return next(csv.reader(fh))
 
 
-def _dim_cols(path) -> list[str]:
+def _dim_cols(path: str | Path) -> list[str]:
     return [c for c in _header(path) if c.startswith("dim_")]
 
 
-def list_layers(data_dir=None) -> list[int]:
+def list_layers(data_dir: str | Path | None = None) -> list[int]:
     d = _resolve(data_dir) / "all_token_streams"
     if not d.is_dir():
         raise DataError(f"layer directory not found: {d}")
@@ -41,12 +41,12 @@ def list_layers(data_dir=None) -> list[int]:
 
 
 def load_token_cloud(
-    data_dir=None,
-    layer=0,
-    value_cols=None,
-    index_cols=None,
-    normalize=False,
-    name=None,
+    data_dir: str | Path | None = None,
+    layer: int = 0,
+    value_cols: list[str] | None = None,
+    index_cols: list[str] | None = None,
+    normalize: bool = False,
+    name: str | None = None,
 ) -> PointSet:
     """The 81 token hidden states (5120-dim) at a single layer."""
     p = layer_path(data_dir, layer)
@@ -62,12 +62,12 @@ def load_token_cloud(
 
 
 def load_layer_points(
-    data_dir=None,
-    layers=None,
-    value_cols=None,
-    index_cols=None,
-    normalize=False,
-    name="layer_points",
+    data_dir: str | Path | None = None,
+    layers: list[int] | None = None,
+    value_cols: list[str] | None = None,
+    index_cols: list[str] | None = None,
+    normalize: bool = False,
+    name: str = "layer_points",
 ) -> PointSet:
     """Stack token hidden states across layers: (tokens x layers) points, each 5120-dim.
 
@@ -90,7 +90,7 @@ def load_layer_points(
     return out
 
 
-def load_residual_matrix(data_dir=None, kind="norms"):
+def load_residual_matrix(data_dir: str | Path | None = None, kind: str = "norms") -> tuple[np.ndarray, list[str]]:
     """Load a per-token, per-layer scalar field (norms/cosines/deltas).
 
     Returns (matrix [n_tokens, n_layers], labels) where labels are '<prompt>_<pos>'."""
@@ -118,7 +118,7 @@ def load_residual_matrix(data_dir=None, kind="norms"):
     return mat, labels
 
 
-def token_texts(data_dir=None, layer=0) -> list[str]:
+def token_texts(data_dir: str | Path | None = None, layer: int = 0) -> list[str]:
     """token_text per row of a layer file (aligned with the token cloud)."""
     import csv
     p = layer_path(data_dir, layer)
@@ -129,7 +129,7 @@ def token_texts(data_dir=None, layer=0) -> list[str]:
         return [row[ti] for row in reader if row]
 
 
-def load_group_info(data_dir=None) -> dict:
+def load_group_info(data_dir: str | Path | None = None) -> dict[str, object]:
     import json
 
     p = _resolve(data_dir) / "group_info.json"
@@ -137,7 +137,7 @@ def load_group_info(data_dir=None) -> dict:
         return json.load(fh)
 
 
-def load_convergence(data_dir=None) -> dict:
+def load_convergence(data_dir: str | Path | None = None) -> dict[str, list[float]]:
     """convergence_analysis.csv as a dict of column -> list over layers."""
     import csv
 
@@ -160,7 +160,7 @@ _ATTENTION_FILES = {
 }
 
 
-def load_attention(data_dir=None, metric: str = "to_self"):
+def load_attention(data_dir: str | Path | None = None, metric: str = "to_self") -> tuple[np.ndarray, list[str], list[str]]:
     """Attention field [n_tokens, n_layers*n_heads] for a metric.
 
     metric in {to_self, from_self_entropy, max_source}. Returns (matrix, labels,
@@ -187,7 +187,7 @@ def load_attention(data_dir=None, metric: str = "to_self"):
     return mat, labels, [header[i] for i in vidx]
 
 
-def final_token_indices(data_dir=None, layer=0) -> list[int]:
+def final_token_indices(data_dir: str | Path | None = None, layer: int = 0) -> list[int]:
     """Row indices (in a layer file's order) of each prompt's final token
     (the largest token_pos per prompt_idx), one per prompt, sorted by prompt."""
     import csv
@@ -204,3 +204,8 @@ def final_token_indices(data_dir=None, layer=0) -> list[int]:
         if pr not in best or tp > best[pr][1]:
             best[pr] = (i, tp)
     return [v[0] for v in sorted(best.items())]
+
+
+from vrtda.beartype_guard import beartype_module as _beartype_module
+
+_beartype_module(__name__)

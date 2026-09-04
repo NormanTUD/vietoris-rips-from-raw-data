@@ -8,15 +8,15 @@ import numpy as np
 from vrtda.persistence import Barcode, Interval
 
 
-def barcode_to_rows(barcode: Barcode) -> list[tuple]:
-    rows = []
+def barcode_to_rows(barcode: Barcode) -> list[tuple[int, str, str, int, int]]:
+    rows: list[tuple[int, str, str, int, int]] = []
     for iv in barcode.intervals:
         death = "inf" if iv.is_essential else f"{iv.death:.9g}"
         rows.append((iv.dim, f"{iv.birth:.9g}", death, iv.birth_simplex, iv.death_simplex))
     return rows
 
 
-def save_barcode_csv(barcode: Barcode, path) -> Path:
+def save_barcode_csv(barcode: Barcode, path: str | Path) -> Path:
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, "w", newline="") as fh:
@@ -27,7 +27,7 @@ def save_barcode_csv(barcode: Barcode, path) -> Path:
     return path
 
 
-def load_barcode_csv(path) -> Barcode:
+def load_barcode_csv(path: str | Path) -> Barcode:
     path = Path(path)
     intervals = []
     with open(path, newline="") as fh:
@@ -47,7 +47,7 @@ def load_barcode_csv(path) -> Barcode:
     return Barcode(intervals=intervals)
 
 
-def persistence_summary_csv(barcode: Barcode, path) -> Path:
+def persistence_summary_csv(barcode: Barcode, path: str | Path) -> Path:
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     s = barcode.summary()
@@ -58,3 +58,8 @@ def persistence_summary_csv(barcode: Barcode, path) -> Path:
             v = s["dims"][d]
             w.writerow([d, v["n"], v["essential"], f"{v['max_length']:.9g}"])
     return path
+
+
+from vrtda.beartype_guard import beartype_module as _beartype_module
+
+_beartype_module(__name__)

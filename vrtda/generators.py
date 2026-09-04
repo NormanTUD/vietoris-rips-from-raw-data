@@ -5,7 +5,7 @@ import numpy as np
 from vrtda.errors import DataError
 
 
-def _rng(seed):
+def _rng(seed: int | None) -> np.random.Generator:
     return np.random.default_rng(seed)
 
 
@@ -161,3 +161,8 @@ def torus3d_grid(nu: int, nv: int, nw: int, R: float = 1.0, r: float = 0.35) -> 
     z = r * np.sin(VV) * np.cos(WW)
     t = r * np.sin(VV) * np.sin(WW)
     return np.column_stack([x.ravel(), y.ravel(), z.ravel(), t.ravel()])
+
+
+from vrtda.beartype_guard import beartype_module as _beartype_module
+
+_beartype_module(__name__)

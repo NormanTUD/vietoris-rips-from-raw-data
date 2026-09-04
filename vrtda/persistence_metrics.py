@@ -35,7 +35,7 @@ def persistence_entropy(bc: Barcode, dim: int | None = None, cap: float | None =
     return float(-np.sum(p * np.log(p) / np.log(base)))
 
 
-def persistence_landscape(bc: Barcode, dim: int | None = None, resolution: int = 100):
+def persistence_landscape(bc: Barcode, dim: int | None = None, resolution: int = 100) -> tuple[np.ndarray, np.ndarray]:
     """Cohen-Stein persistence landscape (finite points).
 
     Returns (xgrid, F): F has shape (n_levels, len(xgrid)); level j is
@@ -88,7 +88,12 @@ def persistence_image(
     return img
 
 
-def persistence_diagram(bc: Barcode, dim: int | None = None):
+def persistence_diagram(bc: Barcode, dim: int | None = None) -> np.ndarray:
     """Off-diagonal points (birth, death) of `dim` as an (n, 2) array."""
     ivs = bc.of_dim(dim) if dim is not None else bc.intervals
     return np.array([[float(iv.birth), float(iv.death)] for iv in ivs if np.isfinite(iv.death)])
+
+
+from vrtda.beartype_guard import beartype_module as _beartype_module
+
+_beartype_module(__name__)

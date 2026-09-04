@@ -21,7 +21,11 @@ def top_variance_dims(X: np.ndarray, k: int) -> list[int]:
     return sorted(int(i) for i in order[:k])
 
 
-def pca(X: np.ndarray, n_components=None, center: bool = True):
+def pca(
+    X: np.ndarray,
+    n_components: int | None = None,
+    center: bool = True,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """Pure-numpy PCA via SVD.
 
     Returns (scores, components, explained_variance_ratio, mean):
@@ -47,12 +51,12 @@ def pca(X: np.ndarray, n_components=None, center: bool = True):
     return scores, comps, evr, mean
 
 
-def explain_variance(X: np.ndarray, n_components=None) -> np.ndarray:
+def explain_variance(X: np.ndarray, n_components: int | None = None) -> np.ndarray:
     _, _, evr, _ = pca(X, n_components=n_components)
     return evr
 
 
-def umap_2d(X: np.ndarray, **kw) -> np.ndarray:
+def umap_2d(X: np.ndarray, **kw: object) -> np.ndarray:
     try:
         import umap
     except ImportError as e:  # pragma: no cover - optional dep
@@ -64,7 +68,7 @@ def umap_2d(X: np.ndarray, **kw) -> np.ndarray:
     return umap.UMAP(**kw).fit_transform(np.asarray(X, dtype=np.float64))
 
 
-def tsne_2d(X: np.ndarray, **kw) -> np.ndarray:
+def tsne_2d(X: np.ndarray, **kw: object) -> np.ndarray:
     try:
         from sklearn.manifold import TSNE
     except ImportError as e:  # pragma: no cover - optional dep
@@ -77,7 +81,12 @@ def tsne_2d(X: np.ndarray, **kw) -> np.ndarray:
     return TSNE(**kw).fit_transform(np.asarray(X, dtype=np.float64))
 
 
-def reduce(X: np.ndarray, method: str, n_components: int = 2, **kw):
+def reduce(
+    X: np.ndarray,
+    method: str,
+    n_components: int = 2,
+    **kw: object,
+) -> tuple[np.ndarray, dict[str, object]]:
     """Dispatch a reduction method. Returns (reduced (n,k), meta)."""
     method = method.lower()
     X = np.asarray(X, dtype=np.float64)
@@ -89,3 +98,8 @@ def reduce(X: np.ndarray, method: str, n_components: int = 2, **kw):
     if method == "tsne":
         return tsne_2d(X, n_components=n_components, **kw), {"method": "tsne"}
     raise DataError(f"unknown reduction method {method!r}; use pca | umap | tsne")
+
+
+from vrtda.beartype_guard import beartype_module as _beartype_module
+
+_beartype_module(__name__)

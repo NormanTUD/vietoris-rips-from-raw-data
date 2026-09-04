@@ -30,7 +30,7 @@ class Interval:
         return (self.dim, self.birth, self.death)
 
     def alive_at(self, eps: float) -> bool:
-        return self.birth <= eps < self.death
+        return bool(self.birth <= eps < self.death)
 
 
 @dataclass

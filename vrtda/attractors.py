@@ -2,20 +2,20 @@ from __future__ import annotations
 
 import numpy as np
 
-from vrtda.persistence import Barcode
+from vrtda.persistence import Barcode, Interval
 
 
-def _capped_length(iv, eps_max: float) -> float:
+def _capped_length(iv: Interval, eps_max: float) -> float:
     death = iv.death if np.isfinite(iv.death) else eps_max
     return max(0.0, death - iv.birth)
 
 
-def essential_intervals(bc: Barcode, dim: int | None = None) -> list:
+def essential_intervals(bc: Barcode, dim: int | None = None) -> list[Interval]:
     ivs = bc.of_dim(dim) if dim is not None else bc.intervals
     return [iv for iv in ivs if iv.is_essential]
 
 
-def long_lived_intervals(bc: Barcode, min_length: float, dim: int | None = None, eps_max: float | None = None) -> list:
+def long_lived_intervals(bc: Barcode, min_length: float, dim: int | None = None, eps_max: float | None = None) -> list[Interval]:
     if eps_max is None:
         eps_max = float(bc.values.max()) if bc.values is not None and len(bc.values) else 0.0
     ivs = bc.of_dim(dim) if dim is not None else bc.intervals
@@ -32,7 +32,7 @@ def max_persistence(bc: Barcode, eps_max: float, dim: int | None = None) -> floa
     return float(max((_capped_length(iv, eps_max) for iv in ivs), default=0.0))
 
 
-def per_dim_summary(bc: Barcode, eps_max: float, min_fraction: float = 0.0) -> dict:
+def per_dim_summary(bc: Barcode, eps_max: float, min_fraction: float = 0.0) -> dict[int, dict[str, int | float]]:
     """Per-dimension attractor metrics.
 
     - n:            total intervals in dim
@@ -56,15 +56,20 @@ def per_dim_summary(bc: Barcode, eps_max: float, min_fraction: float = 0.0) -> d
     return out
 
 
-def compare(clouds: dict, eps_max: float, min_fraction: float = 0.0) -> list[dict]:
+def compare(clouds: dict[str, Barcode], eps_max: float, min_fraction: float = 0.0) -> list[dict[str, object]]:
     """clouds: dict name -> Barcode. Returns a list of rows (one per name) with
     per-dimension attractor metrics flattened, for tabular comparison."""
-    rows = []
+    rows: list[dict[str, object]] = []
     for name, bc in clouds.items():
-        row = {"name": name}
+        row: dict[str, object] = {"name": name}
         for d, v in per_dim_summary(bc, eps_max, min_fraction).items():
             row[f"b{d}_essential"] = v["essential"]
             row[f"b{d}_long_lived"] = v["long_lived"]
             row[f"b{d}_total_persistence"] = v["total_persistence"]
         rows.append(row)
     return rows
+
+
+from vrtda.beartype_guard import beartype_module as _beartype_module
+
+_beartype_module(__name__)

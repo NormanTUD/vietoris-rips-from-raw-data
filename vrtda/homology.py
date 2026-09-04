@@ -28,7 +28,7 @@ def gf2_rank(cols: list[int]) -> int:
     return rank
 
 
-def _boundary_columns(complex, keep: set[int], pos: dict[int, int], k: int) -> list[int]:
+def _boundary_columns(complex: FilteredComplex, keep: set[int], pos: dict[int, int], k: int) -> list[int]:
     if k <= 0:
         return []
     row_dim = k - 1
@@ -46,7 +46,7 @@ def _boundary_columns(complex, keep: set[int], pos: dict[int, int], k: int) -> l
     return cols
 
 
-def betti_at(complex, eps: float) -> list[int]:
+def betti_at(complex: FilteredComplex, eps: float) -> list[int]:
     keep = {j for j in range(complex.n_simplices) if complex.values[j] <= eps + 1e-15}
     maxk = max((int(complex.dims[j]) for j in keep), default=-1)
     pos = {old: new for new, old in enumerate(sorted(keep))}
@@ -61,7 +61,7 @@ def betti_at(complex, eps: float) -> list[int]:
     return out
 
 
-def betti_function(complex, epsilons) -> np.ndarray:
+def betti_function(complex: FilteredComplex, epsilons: Sequence[float]) -> np.ndarray:
     epsilons = list(epsilons)
     maxk = int(complex.dims.max()) if complex.n_simplices else 0
     arr = np.zeros((len(epsilons), maxk + 1), dtype=np.int64)
@@ -72,6 +72,11 @@ def betti_function(complex, epsilons) -> np.ndarray:
     return arr
 
 
-def euler_characteristic(complex, eps: float) -> int:
+def euler_characteristic(complex: FilteredComplex, eps: float) -> int:
     b = betti_at(complex, eps)
     return sum((-1) ** k * b[k] for k in range(len(b)))
+
+
+from vrtda.beartype_guard import beartype_module as _beartype_module
+
+_beartype_module(__name__)
