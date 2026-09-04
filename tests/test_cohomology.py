@@ -1,11 +1,14 @@
+from __future__ import annotations
+
 import numpy as np
 import pytest
 
 from vrtda import FilteredComplex, betti_at, cohomology_at
+from vrtda.beartype_guard import beartype_module
 from vrtda.cohomology import assert_homology_cohomology_match
 
 
-def _sphere():
+def _sphere() -> FilteredComplex:
     return FilteredComplex.from_explicit([
         (0.0, 0, (0,)), (0.0, 0, (1,)), (0.0, 0, (2,)), (0.0, 0, (3,)),
         (1.0, 1, (0, 1)), (1.0, 1, (0, 2)), (1.0, 1, (0, 3)),
@@ -14,20 +17,20 @@ def _sphere():
     ])
 
 
-def test_cohomology_equals_homology_sphere():
+def test_cohomology_equals_homology_sphere() -> None:
     C = _sphere()
     eps = float(C.values.max())
     assert cohomology_at(C, eps) == betti_at(C, eps) == [1, 0, 1]
 
 
-def test_cohomology_match_helper_passes():
+def test_cohomology_match_helper_passes() -> None:
     from vrtda.complexes import make_torus_grid_complex
     C = make_torus_grid_complex(2, (3, 3))
     eps = float(C.values.max())
     assert_homology_cohomology_match(C, [0.0, 1.0, eps])  # should not raise
 
 
-def test_cohomology_at_intermediate_eps():
+def test_cohomology_at_intermediate_eps() -> None:
     from vrtda import pairwise_distances, build_rips
     from vrtda.generators import circle_grid
     pts = circle_grid(24)
@@ -37,3 +40,6 @@ def test_cohomology_at_intermediate_eps():
         h = betti_at(C, eps)
         c = cohomology_at(C, eps)
         assert h == c, f"eps={eps}: homology {h} != cohomology {c}"
+
+
+beartype_module(__name__)
