@@ -127,3 +127,80 @@ def token_texts(data_dir=None, layer=0) -> list[str]:
         header = next(reader)
         ti = header.index("token_text")
         return [row[ti] for row in reader if row]
+
+
+def load_group_info(data_dir=None) -> dict:
+    import json
+
+    p = _resolve(data_dir) / "group_info.json"
+    with open(p) as fh:
+        return json.load(fh)
+
+
+def load_convergence(data_dir=None) -> dict:
+    """convergence_analysis.csv as a dict of column -> list over layers."""
+    import csv
+
+    p = _resolve(data_dir) / "convergence_analysis.csv"
+    with open(p, newline="") as fh:
+        reader = csv.reader(fh)
+        header = next(reader)
+        rows = [r for r in reader if r]
+    data = {c: [] for c in header}
+    for row in rows:
+        for c in header:
+            data[c].append(float(row[header.index(c)]))
+    return data
+
+
+_ATTENTION_FILES = {
+    "to_self": "attention_to_self.csv",
+    "from_self_entropy": "attention_from_self_entropy.csv",
+    "max_source": "attention_max_source.csv",
+}
+
+
+def load_attention(data_dir=None, metric: str = "to_self"):
+    """Attention field [n_tokens, n_layers*n_heads] for a metric.
+
+    metric in {to_self, from_self_entropy, max_source}. Returns (matrix, labels,
+    column_names) where labels are '<prompt>_<pos>'."""
+    import csv
+
+    if metric not in _ATTENTION_FILES:
+        raise DataError(f"metric must be one of {list(_ATTENTION_FILES)}, got {metric!r}")
+    p = _resolve(data_dir) / "attention" / _ATTENTION_FILES[metric]
+    with open(p, newline="") as fh:
+        reader = csv.reader(fh)
+        header = next(reader)
+        rows = [r for r in reader if r]
+    iidx = [header.index(c) for c in INDEX_COLS]
+    tidx = header.index("token_text")
+    keep = set(iidx) | {tidx}
+    vidx = [i for i in range(len(header)) if i not in keep]
+    mat = np.empty((len(rows), len(vidx)), dtype=np.float64)
+    labels = []
+    for r, row in enumerate(rows):
+        labels.append(f"{row[iidx[0]]}_{row[iidx[1]]}")
+        for c, ci in enumerate(vidx):
+            mat[r, c] = float(row[ci])
+    return mat, labels, [header[i] for i in vidx]
+
+
+def final_token_indices(data_dir=None, layer=0) -> list[int]:
+    """Row indices (in a layer file's order) of each prompt's final token
+    (the largest token_pos per prompt_idx), one per prompt, sorted by prompt."""
+    import csv
+
+    p = layer_path(data_dir, layer)
+    with open(p, newline="") as fh:
+        reader = csv.reader(fh)
+        header = next(reader)
+        rows = [r for r in reader if r]
+    pi, ti = header.index("prompt_idx"), header.index("token_pos")
+    best: dict[int, tuple[int, int]] = {}
+    for i, row in enumerate(rows):
+        pr, tp = int(row[pi]), int(row[ti])
+        if pr not in best or tp > best[pr][1]:
+            best[pr] = (i, tp)
+    return [v[0] for v in sorted(best.items())]
