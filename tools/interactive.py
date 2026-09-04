@@ -2,16 +2,23 @@
 # requires-python = ">=3.10"
 # dependencies = ["numpy>=1.26", "beartype>=0.18"]
 # ///
-"""Build a self-contained interactive HTML/JS file that shows a TDA filtration.
+"""Build a self-contained interactive HTML/JS file for exploring TDA.
 
-Drag the epsilon slider (or press Play) and watch the Vietoris-Rips complex grow:
-points -> edges -> faces, while the Betti numbers beta_0 / beta_1 / beta_2
-(H0 components, H1 loops/holes, H2 voids) update live, next to a live
-persistence diagram and the Betti function. Drag the 3D view to rotate.
+Two modes:
 
-Lower-dim clouds (2D/3D) are drawn directly; higher-dim clouds are shown as a
-3D PCA projection while the topology is still computed in the original D-dim
+Filtration mode (default) -- drag the epsilon slider (or press Play) and watch
+the Vietoris-Rips complex grow: points -> edges -> faces, while the Betti numbers
+beta_0 / beta_1 / beta_2 (H0 components, H1 loops/holes, H2 voids) update live,
+next to a live persistence diagram and the Betti function. Drag the 3D view to
+rotate. Lower-dim clouds (2D/3D) are drawn directly; higher-dim clouds are shown
+as a 3D PCA projection while the topology is still computed in the original D-dim
 space (so the Betti numbers stay exact).
+
+Layer/trajectory mode (--layers) -- treats the transformer layers as time steps.
+The same 81 tokens are projected into ONE shared 3D frame (PCA of a few layers),
+and you drag a time slider to watch the tokens MOVE across the surface as depth
+increases, with their full trajectories drawn as trails (coloured by prompt),
+plus a live convergence (spread-over-depth) curve.
 
 Examples:
     # the clean, exact 2-torus (target beta = [1,2,1]), 3D donut you can rotate
@@ -27,10 +34,15 @@ Examples:
 
     # the 2-torus as a point cloud (product of two circles) via Rips
     uv run tools/interactive.py --shape product --k 2 --nper 10 --out product.html
+
+    # watch the 81 tokens move across layers (time) - full depth or a subsample
+    uv run tools/interactive.py --layers --out layers.html
+    uv run tools/interactive.py --layers 0:64:8 --out layers.html
 """
 import argparse
 import json
 import sys
+import time
 from pathlib import Path
 
 ROOT = str(Path(__file__).resolve().parents[1])
@@ -42,7 +54,7 @@ import numpy as np
 from vrtda import PointSet, pairwise_distances
 from vrtda.complexes import FilteredComplex, build_rips, make_torus_grid_complex
 from vrtda.persistence import persistent_homology
-from vrtda import generators as G
+from vrtda import datasets, generators as G
 from vrtda.beartype_guard import beartype_module
 
 
@@ -173,6 +185,7 @@ def build_payload(args: argparse.Namespace) -> dict[str, object]:
            f"ε_max = {eps_max:.3f}" + (f"  ·  target β = {target}" if target else ""))
 
     return {
+        "mode": "filtration",
         "title": title,
         "sub": sub,
         "metric": args.metric,
@@ -185,6 +198,84 @@ def build_payload(args: argparse.Namespace) -> dict[str, object]:
         "faces": faces,
         "betti": {"grid": _round_list(list(grid)), "table": table.tolist(), "maxdim": maxdim},
         "intervals": intervals,
+    }
+
+
+def parse_layers(spec: str | None) -> list[int]:
+    """Parse a --layers spec: 'start:stop[:step]' (Python range, inclusive stop),
+    a comma list ('0,16,32,64'), or an explicit space/comma list of ints. None -> all."""
+    all_l = datasets.list_layers()
+    if not spec or spec == "all":
+        return all_l
+    spec = spec.strip()
+    if ":" in spec:
+        parts = spec.split(":")
+        a = int(parts[0]); b = int(parts[1])
+        st = int(parts[2]) if len(parts) > 2 and parts[2] else 1
+        st = max(1, st)
+        out = list(range(a, b + 1, st)) if a <= b else list(range(a, b - 1, -st))
+        return [L for L in out if L in all_l]
+    toks = [t for t in spec.replace(",", " ").split() if t]
+    if not toks:
+        return all_l
+    try:
+        vals = [int(t) for t in toks]
+    except ValueError:
+        raise SystemExit(f"cannot parse --layers {spec!r}")
+    return [L for L in vals if L in all_l]
+
+
+def build_layer_trajectory(args: argparse.Namespace) -> dict[str, object]:
+    """Layer/trajectory mode: project the token clouds of several layers into one
+    shared 3D frame (PCA of a few reference layers) so the tokens can be seen
+    MOVING across the surface as the layer index (time) advances."""
+    layers = parse_layers(args.layers)
+    if not layers:
+        raise SystemExit(f"no layers matched {args.layers!r}; available: {datasets.list_layers()}")
+    all_l = datasets.list_layers()
+    ref_idx = sorted(set([0, len(layers) // 2, len(layers) - 1]))
+    ref_layers = [layers[i] for i in ref_idx]
+    ref = [datasets.load_token_cloud(data_dir=args.data_dir, layer=L).data for L in ref_layers]
+    stack = np.vstack(ref)
+    center = stack.mean(0)
+    _u, _s, Vt = np.linalg.svd(stack - center, full_matrices=False)
+    frame = Vt[:3]
+
+    traj = np.zeros((len(layers), ref[0].shape[0], 3), dtype=np.float64)
+    spread = np.zeros(len(layers), dtype=np.float64)
+    for i, L in enumerate(layers):
+        X = datasets.load_token_cloud(data_dir=args.data_dir, layer=L).data
+        P3 = (X - center) @ frame.T
+        traj[i] = P3
+        spread[i] = float(np.linalg.norm(P3 - P3.mean(0), axis=1).mean())
+
+    ref_ps = datasets.load_token_cloud(data_dir=args.data_dir, layer=layers[0])
+    labels = list(ref_ps.labels)
+    ntok = len(labels)
+    prompts = [int(lbl.split("_")[0]) for lbl in labels]
+    order = sorted(set(prompts))
+    group_of = [order.index(q) for q in prompts]
+    try:
+        texts = datasets.token_texts(data_dir=args.data_dir, layer=layers[0])
+        ptexts = [next((texts[t] for t in range(ntok) if group_of[t] == g), str(order[g])) for g in range(len(order))]
+    except Exception:
+        ptexts = [str(order[g]) for g in range(len(order))]
+
+    title = args.title or "Token trajectories across layers"
+    sub = (f"layers {layers[0]}…{layers[-1]} ({len(layers)} steps)  ·  {ntok} tokens in a shared "
+           f"3D PCA frame  ·  each layer = one time step  ·  drag to rotate")
+    return {
+        "mode": "trajectory",
+        "title": title,
+        "sub": sub,
+        "n_layers": len(layers),
+        "layers": [int(L) for L in layers],
+        "n_tokens": ntok,
+        "token_labels": labels,
+        "traj": [[[round(float(v), 1) for v in row] for row in traj[t]] for t in range(ntok)],
+        "spread": [round(float(v), 3) for v in spread],
+        "group_of": group_of,
+        "prompt_labels": ptexts,
     }
 
 
@@ -230,9 +321,11 @@ TEMPLATE = r"""<!DOCTYPE html>
            padding: 7px 14px; cursor: pointer; font-size: 13px; }
   button:hover { background:#283241; }
   input[type=range] { flex: 1; min-width: 160px; accent-color: #4ea1ff; }
-  #eps-readout { font-variant-numeric: tabular-nums; font-size: 13px; color: var(--mut); min-width: 118px; }
+  #eps-readout { font-variant-numeric: tabular-nums; font-size: 13px; color: var(--mut); min-width: 130px; }
   .toggle { display:flex; align-items:center; gap:5px; font-size: 12.5px; color: var(--mut); cursor:pointer; user-select:none; }
   #badge { font-size: 12px; color:#2ea043; font-weight:650; }
+  #legend { display:flex; flex-wrap:wrap; gap:6px 12px; font-size:11.5px; color:var(--mut); }
+  #legend .dot { width:10px; height:10px; }
 </style>
 </head>
 <body>
@@ -243,22 +336,30 @@ TEMPLATE = r"""<!DOCTYPE html>
   <div id="main">
     <div id="left">
       <canvas id="scene"></canvas>
-      <div id="hint">drag to rotate · slider / ▶ Play to step the filtration ε</div>
+      <div id="hint"></div>
     </div>
     <div id="right">
       <div id="cards"></div>
-      <div class="panel">
+      <div class="panel" id="p-bfun">
         <h3>Betti numbers over ε &nbsp;<span id="badge"></span></h3>
         <canvas id="bfun" height="150"></canvas>
       </div>
-      <div class="panel">
+      <div class="panel" id="p-diag">
         <h3>Persistence diagram (birth → death)</h3>
         <canvas id="diag" height="230"></canvas>
       </div>
-      <div class="panel">
+      <div class="panel" id="p-conv" style="display:none">
+        <h3>Convergence — spread over depth</h3>
+        <canvas id="conv" height="150"></canvas>
+      </div>
+      <div class="panel" id="p-toggles">
         <div class="toggle"><input type="checkbox" id="t-points" checked><label for="t-points">Points</label></div>
         <div class="toggle"><input type="checkbox" id="t-edges" checked><label for="t-edges">Edges (H¹)</label></div>
         <div class="toggle"><input type="checkbox" id="t-faces" checked><label for="t-faces">Faces (fill, H²)</label></div>
+      </div>
+      <div class="panel" id="p-legend" style="display:none">
+        <h3>Prompts</h3>
+        <div id="legend"></div>
       </div>
     </div>
   </div>
@@ -272,33 +373,56 @@ TEMPLATE = r"""<!DOCTYPE html>
 
 <script>
 const DATA = __DATA__;
+const MODE = DATA.mode || "filtration";
 const DIM_NAME = {0:"H₀ components", 1:"H₁ loops / holes", 2:"H₂ voids", 3:"H₃", 4:"H₄"};
 const DIM_COLOR = {0:"#4ea1ff", 1:"#3fd07a", 2:"#ff9f45", 3:"#e060c0", 4:"#c9d16a"};
-const EMAX = DATA.eps_max;
-const MD = DATA.maxdim;
-const P = DATA.points, E = DATA.edges, F = DATA.faces, IV = DATA.intervals;
-const GRID = DATA.betti.grid, TABLE = DATA.betti.table;
+const EMAX = (DATA.eps_max || 1);
+const MD = DATA.maxdim || 0;
+const P = DATA.points || [], E = DATA.edges || [], F = DATA.faces || [], IV = DATA.intervals || [];
+const GRID = (DATA.betti && DATA.betti.grid) || [0,1];
+const TABLE = (DATA.betti && DATA.betti.table) || [[0]];
 
-let rx = -0.45, ry = 0.7, eps = 0, playing = false, raf = null, lastT = 0;
+const N_L = DATA.n_layers || 0;
+const TRAJ = DATA.traj || [];
+const SPREAD = DATA.spread || [];
+const N_TOK = DATA.n_tokens || 0;
+const GROUP = DATA.group_of || [];
+
+let rx = -0.45, ry = 0.7, eps = 0, t = 0, playing = false, raf = null, lastT = 0;
 let showPoints = true, showEdges = true, showFaces = true;
 let fitR = 1.0;
 
 const scene = document.getElementById("scene"), sctx = scene.getContext("2d");
 const bfun  = document.getElementById("bfun"),  bctx = bfun.getContext("2d");
 const diag  = document.getElementById("diag"),  dctx = diag.getContext("2d");
+const conv  = document.getElementById("conv"),  cctx = conv.getContext("2d");
 
 document.getElementById("title").textContent = DATA.title;
 document.getElementById("sub").textContent = DATA.sub;
+document.getElementById("hint").textContent = MODE === "trajectory"
+  ? "drag to rotate · slider / ▶ Play to step through layers (time)"
+  : "drag to rotate · slider / ▶ Play to step the filtration ε";
 
-// ---- Betti cards ---------------------------------------------------------
+// ---- side cards ----------------------------------------------------------
 const cardsEl = document.getElementById("cards");
 const cardNums = [];
-for (let d = 0; d <= MD; d++) {
+if (MODE === "filtration"){
+  for (let d = 0; d <= MD; d++){
+    const el = document.createElement("div");
+    el.className = "card";
+    el.innerHTML = `<div class="lbl"><span class="dot" style="background:${DIM_COLOR[d]}"></span>${DIM_NAME[d] || ("H"+d)}<br>β<sub>${d}</sub></div><div class="num" id="b${d}">0</div>`;
+    cardsEl.appendChild(el);
+    cardNums.push(document.getElementById("b" + d));
+  }
+} else {
   const el = document.createElement("div");
   el.className = "card";
-  el.innerHTML = `<div class="lbl"><span class="dot" style="background:${DIM_COLOR[d]}"></span>${DIM_NAME[d] || ("H"+d)}<br>β<sub>${d}</sub></div><div class="num" id="b${d}">0</div>`;
+  el.innerHTML = `<div class="lbl">layer (time)</div><div class="num" id="layer-num" style="font-size:26px">0</div>`;
   cardsEl.appendChild(el);
-  cardNums.push(document.getElementById("b" + d));
+  const el2 = document.createElement("div");
+  el2.className = "card";
+  el2.innerHTML = `<div class="lbl">tokens moving</div><div class="num" id="tok-num" style="font-size:26px">0</div>`;
+  cardsEl.appendChild(el2);
 }
 
 // ---- canvas sizing -------------------------------------------------------
@@ -308,7 +432,11 @@ function fit(c){
   c.height = Math.max(2, Math.round(r.height * dpr));
   return dpr;
 }
-function fitAll(){ fit(scene); fit(bfun); fit(diag); }
+function fitAll(){
+  fit(scene); fit(bfun); fit(diag); fit(conv);
+  if (MODE !== "filtration"){ document.getElementById("p-bfun").style.display="none"; document.getElementById("p-diag").style.display="none"; }
+  if (MODE !== "trajectory"){ document.getElementById("p-conv").style.display="none"; document.getElementById("p-legend").style.display="none"; }
+}
 window.addEventListener("resize", () => { fitAll(); render(); });
 
 // ---- 3D -> 2D projection -------------------------------------------------
@@ -322,15 +450,19 @@ function project(p){
 }
 function computeFit(){
   let mx=0;
-  for (const p of P){ const q=project(p); const r=q[0]*q[0]+q[1]*q[1]+q[2]*q[2]; if(r>mx) mx=r; }
+  if (MODE === "trajectory"){
+    for (const tok of TRAJ) for (const p of tok){ const q=project(p); const r=q[0]*q[0]+q[1]*q[1]+q[2]*q[2]; if(r>mx) mx=r; }
+  } else {
+    for (const p of P){ const q=project(p); const r=q[0]*q[0]+q[1]*q[1]+q[2]*q[2]; if(r>mx) mx=r; }
+  }
   fitR = Math.sqrt(mx) || 1;
 }
 function toScreen(q, w, h){
-  const s = Math.min(w, h) * 0.40 / fitR;
+  const s = Math.min(w, h) * 0.42 / fitR;
   return [ w/2 + q[0]*s, h/2 - q[1]*s, q[2] ];
 }
 
-// ---- color by value ------------------------------------------------------
+// ---- color ----------------------------------------------------------------
 const STOPS = [[0,[30,80,220]],[0.25,[20,180,220]],[0.5,[45,200,95]],[0.75,[240,210,45]],[1,[232,64,64]]];
 function colormap(t){
   t = Math.max(0, Math.min(1, t));
@@ -344,15 +476,10 @@ function colormap(t){
   return STOPS[STOPS.length-1][1];
 }
 const rgba=(c,a)=>`rgba(${c[0]|0},${c[1]|0},${c[2]|0},${a==null?1:a})`;
+const PROMPT_COLORS = ["#4ea1ff","#3fd07a","#ff9f45","#e060c0","#f5d442","#5ad1e6","#ff6b81","#9d7bff","#6bde7f","#e8873a","#7aa2ff","#c9d16a"];
+function groupColor(g){ return PROMPT_COLORS[((g % PROMPT_COLORS.length) + PROMPT_COLORS.length) % PROMPT_COLORS.length]; }
 
-// ---- betti lookup --------------------------------------------------------
-function bettiAt(e){
-  let idx = Math.round(e/EMAX*(GRID.length-1));
-  idx = Math.max(0, Math.min(GRID.length-1, idx));
-  return TABLE[idx];
-}
-
-// ---- scene render --------------------------------------------------------
+// ---- filtration scene ----------------------------------------------------
 function renderScene(){
   const dpr = window.devicePixelRatio || 1;
   const w = scene.width/dpr, h = scene.height/dpr;
@@ -361,26 +488,24 @@ function renderScene(){
   const proj = P.map(project);
   const scr = proj.map(q => toScreen(q, w, h));
 
-  // faces (triangles) with value <= eps, far first
   if (showFaces){
     const act = [];
-    for (const t of F){ if (t[3] <= eps) act.push(t); }
+    for (const f of F){ if (f[3] <= eps) act.push(f); }
     act.sort((a,b)=>{
       const za=(proj[a[0]][2]+proj[a[1]][2]+proj[a[2]][2])/3;
       const zb=(proj[b[0]][2]+proj[b[1]][2]+proj[b[2]][2])/3;
       return za-zb;
     });
-    for (const t of act){
+    for (const f of act){
       sctx.beginPath();
-      sctx.moveTo(scr[t[0]][0], scr[t[0]][1]);
-      sctx.lineTo(scr[t[1]][0], scr[t[1]][1]);
-      sctx.lineTo(scr[t[2]][0], scr[t[2]][1]);
+      sctx.moveTo(scr[f[0]][0], scr[f[0]][1]);
+      sctx.lineTo(scr[f[1]][0], scr[f[1]][1]);
+      sctx.lineTo(scr[f[2]][0], scr[f[2]][1]);
       sctx.closePath();
-      sctx.fillStyle = rgba(colormap(t[3]/EMAX), 0.16);
+      sctx.fillStyle = rgba(colormap(f[3]/EMAX), 0.16);
       sctx.fill();
     }
   }
-  // edges with value <= eps
   if (showEdges){
     sctx.lineWidth = 1.2;
     for (const e of E){
@@ -392,7 +517,6 @@ function renderScene(){
       sctx.stroke();
     }
   }
-  // points
   if (showPoints){
     sctx.fillStyle = "#e6edf3";
     for (let i=0;i<P.length;i++){
@@ -400,6 +524,43 @@ function renderScene(){
       sctx.arc(scr[i][0], scr[i][1], 2.0, 0, Math.PI*2);
       sctx.fill();
     }
+  }
+  sctx.restore();
+}
+
+// ---- trajectory scene (points moving across layers) ----------------------
+function lerpPos(tok, f){
+  const i0 = Math.max(0, Math.min(N_L-1, Math.floor(f)));
+  const i1 = Math.max(0, Math.min(N_L-1, i0+1));
+  const fr = f - i0;
+  const a = TRAJ[tok][i0], b = TRAJ[tok][i1];
+  return [ a[0]+(b[0]-a[0])*fr, a[1]+(b[1]-a[1])*fr, a[2]+(b[2]-a[2])*fr ];
+}
+function renderTrajScene(){
+  const dpr = window.devicePixelRatio || 1;
+  const w = scene.width/dpr, h = scene.height/dpr;
+  sctx.save(); sctx.scale(dpr, dpr);
+  sctx.clearRect(0,0,w,h);
+  // trails: each token's path from layer 0 up to the current time
+  sctx.lineWidth = 1.1;
+  for (let tok=0; tok<N_TOK; tok++){
+    const col = groupColor(GROUP[tok]);
+    sctx.strokeStyle = rgba([0,0,0], 0); // (color set per-below)
+    sctx.strokeStyle = col; sctx.globalAlpha = 0.30;
+    sctx.beginPath();
+    let started = false;
+    for (let L=0; L<=t; L++){
+      const s = toScreen(project(TRAJ[tok][L]), w, h);
+      if (!started){ sctx.moveTo(s[0], s[1]); started = true; } else sctx.lineTo(s[0], s[1]);
+    }
+    sctx.stroke();
+  }
+  sctx.globalAlpha = 1;
+  // current positions (bright, coloured by prompt)
+  for (let tok=0; tok<N_TOK; tok++){
+    const s = toScreen(project(lerpPos(tok, t)), w, h);
+    sctx.fillStyle = groupColor(GROUP[tok]);
+    sctx.beginPath(); sctx.arc(s[0], s[1], 3.0, 0, Math.PI*2); sctx.fill();
   }
   sctx.restore();
 }
@@ -412,16 +573,13 @@ function renderDiagram(){
   dctx.clearRect(0,0,w,h);
   const m = 26, pw = w-m-8, ph = h-m-8;
   const X = v => m + (v/EMAX)*pw, Y = v => h-m - (v/EMAX)*ph;
-  // axes + diagonal
   dctx.strokeStyle = "#3a4553"; dctx.lineWidth = 1;
   dctx.strokeRect(m, 8, pw, ph);
   dctx.strokeStyle = "#5a6675"; dctx.setLineDash([4,4]);
   dctx.beginPath(); dctx.moveTo(X(0),Y(0)); dctx.lineTo(X(EMAX),Y(EMAX)); dctx.stroke(); dctx.setLineDash([]);
-  // crosshair at eps
   dctx.strokeStyle = "#e6edf3"; dctx.globalAlpha=0.5; dctx.lineWidth=1;
   dctx.beginPath(); dctx.moveTo(X(eps),8); dctx.lineTo(X(eps),h-m); dctx.stroke();
   dctx.beginPath(); dctx.moveTo(m,Y(eps)); dctx.lineTo(w-8,Y(eps)); dctx.stroke(); dctx.globalAlpha=1;
-  // points
   for (const iv of IV){
     const alive = iv[1] <= eps && eps < iv[2];
     const dead = eps >= iv[2];
@@ -430,7 +588,6 @@ function renderDiagram(){
     dctx.beginPath(); dctx.arc(X(iv[1]), Y(iv[2]), alive?3.4:2.4, 0, Math.PI*2); dctx.fill();
   }
   dctx.globalAlpha=1;
-  // labels
   dctx.fillStyle = "#8b98a9"; dctx.font = "10px system-ui";
   dctx.fillText("birth →", m, h-4);
   dctx.save(); dctx.translate(9, m+ph/2); dctx.rotate(-Math.PI/2); dctx.fillText("death ↑", 0, 0); dctx.restore();
@@ -455,11 +612,9 @@ function renderBfun(){
     }
     bctx.stroke();
   }
-  // cursor
   const cx = m + (eps/EMAX)*pw;
   bctx.strokeStyle="#e6edf3"; bctx.globalAlpha=0.6; bctx.beginPath();
   bctx.moveTo(cx,8); bctx.lineTo(cx,8+ph); bctx.stroke(); bctx.globalAlpha=1;
-  // legend
   let lx = m+6;
   for (let d=0; d<=MD; d++){
     bctx.fillStyle = DIM_COLOR[d]; bctx.fillRect(lx, h-6, 9, 3);
@@ -469,55 +624,115 @@ function renderBfun(){
   bctx.restore();
 }
 
-// ---- Betti cards update --------------------------------------------------
-function updateCards(){
-  const b = bettiAt(eps);
-  let match = true;
-  for (let d=0; d<=MD; d++){
-    cardNums[d].textContent = b[d];
-    cardNums[d].style.color = DIM_COLOR[d];
-    if (DATA.target && DATA.target[d] !== undefined && b[d] !== DATA.target[d]) match = false;
+// ---- convergence (spread over depth) -------------------------------------
+function renderConv(){
+  const dpr = window.devicePixelRatio || 1;
+  const w = conv.width/dpr, h = conv.height/dpr;
+  cctx.save(); cctx.scale(dpr, dpr);
+  cctx.clearRect(0,0,w,h);
+  const m = 22, pw = w-m-8, ph = h-16-8;
+  const n = SPREAD.length;
+  let mn=Infinity, mx=-Infinity; for (const v of SPREAD){ if(v<mn)mn=v; if(v>mx)mx=v; }
+  if (!isFinite(mn)){ mn=0; mx=1; }
+  if (mx-mn < 1e-9) mx = mn+1;
+  const X = i => m + (i/Math.max(1,n-1))*pw, Y = v => 8 + ph - ((v-mn)/(mx-mn))*ph;
+  cctx.strokeStyle="#3a4553"; cctx.strokeRect(m,8,pw,ph);
+  cctx.strokeStyle="#4ea1ff"; cctx.lineWidth=1.8; cctx.beginPath();
+  for (let i=0;i<n;i++){ const x=X(i), y=Y(SPREAD[i]); if(i===0) cctx.moveTo(x,y); else cctx.lineTo(x,y); }
+  cctx.stroke();
+  const cx = X(t);
+  cctx.strokeStyle="#e6edf3"; cctx.globalAlpha=0.6; cctx.beginPath();
+  cctx.moveTo(cx,8); cctx.lineTo(cx,8+ph); cctx.stroke(); cctx.globalAlpha=1;
+  cctx.fillStyle="#8b98a9"; cctx.font="10px system-ui";
+  cctx.fillText("depth (layer) →", m, h-3);
+  cctx.restore();
+}
+
+// ---- prompt legend -------------------------------------------------------
+function buildLegend(){
+  const gmax = (GROUP.length ? Math.max.apply(null, GROUP) : 0) + 1;
+  let html = "";
+  for (let g=0; g<gmax; g++){
+    const cnt = GROUP.reduce((a,b)=>a+(b===g?1:0), 0);
+    const lbl = DATA.prompt_labels && DATA.prompt_labels[g] ? DATA.prompt_labels[g] : ("prompt "+g);
+    html += `<span><span class="dot" style="background:${groupColor(g)}"></span>${lbl} <span style="opacity:.6">(${cnt})</span></span>`;
   }
-  const badge = document.getElementById("badge");
-  if (DATA.target){
-    const m = b.slice(0, DATA.target.length).every((v,i)=>v===DATA.target[i]);
-    badge.textContent = m ? "✓ matches expected topology" : "";
-    for (let d=0; d<=MD; d++) document.querySelectorAll(".card")[d].classList.toggle("match", m);
-  } else badge.textContent = "";
+  document.getElementById("legend").innerHTML = html;
+}
+
+// ---- cards update --------------------------------------------------------
+function bettiAt(e){
+  let idx = Math.round(e/EMAX*(GRID.length-1));
+  idx = Math.max(0, Math.min(GRID.length-1, idx));
+  return TABLE[idx];
+}
+function updateCards(){
+  if (MODE === "filtration"){
+    const b = bettiAt(eps);
+    for (let d=0; d<=MD; d++){
+      cardNums[d].textContent = b[d];
+      cardNums[d].style.color = DIM_COLOR[d];
+    }
+    const badge = document.getElementById("badge");
+    if (DATA.target){
+      const m = b.slice(0, DATA.target.length).every((v,i)=>v===DATA.target[i]);
+      badge.textContent = m ? "✓ matches expected topology" : "";
+      for (let d=0; d<=MD; d++) document.querySelectorAll(".card")[d].classList.toggle("match", m);
+    } else badge.textContent = "";
+  } else {
+    const li = Math.max(0, Math.min(N_L-1, Math.round(t)));
+    const ln = document.getElementById("layer-num"); if (ln) ln.textContent = DATA.layers[li] + "  /  " + DATA.layers[N_L-1];
+    const tn = document.getElementById("tok-num"); if (tn) tn.textContent = N_TOK;
+  }
 }
 
 function render(){
   computeFit();
-  renderScene();
-  renderDiagram();
-  renderBfun();
+  if (MODE === "trajectory"){ renderTrajScene(); renderConv(); }
+  else { renderScene(); renderDiagram(); renderBfun(); }
   updateCards();
-  document.getElementById("eps-readout").textContent = `ε = ${eps.toFixed(3)}  /  ${EMAX.toFixed(3)}`;
+  const ro = document.getElementById("eps-readout");
+  if (MODE === "trajectory"){
+    const li = Math.max(0, Math.min(N_L-1, Math.round(t)));
+    ro.textContent = `layer ${DATA.layers[li]}  ·  t = ${t.toFixed(1)}/${N_L-1}`;
+  } else {
+    ro.textContent = `ε = ${eps.toFixed(3)}  /  ${EMAX.toFixed(3)}`;
+  }
 }
 
 // ---- controls ------------------------------------------------------------
 const slider = document.getElementById("slider");
-slider.addEventListener("input", () => { stopPlay(); eps = slider.value/1000*EMAX; render(); });
-function setSlider(){ slider.value = Math.round(eps/EMAX*1000); }
-
+if (MODE === "trajectory"){ slider.max = Math.max(1, N_L-1); }
+function setSlider(){ slider.value = Math.round(MODE === "trajectory" ? t : eps/EMAX*1000); }
+slider.addEventListener("input", () => {
+  stopPlay();
+  if (MODE === "trajectory") t = +slider.value; else eps = +slider.value/1000*EMAX;
+  render();
+});
 const playBtn = document.getElementById("play");
 function stopPlay(){ playing=false; if(raf) cancelAnimationFrame(raf); playBtn.textContent="▶ Play"; }
-function tick(t){
+function tick(now){
   if(!playing) return;
-  if(!lastT) lastT=t;
-  const dt=(t-lastT)/1000; lastT=t;
-  eps += dt * (EMAX/8);            // full sweep in ~8 s
-  if (eps >= EMAX){ eps = EMAX; stopPlay(); }
+  if(!lastT) lastT=now;
+  const dt=(now-lastT)/1000; lastT=now;
+  if (MODE === "trajectory"){
+    t += dt * (Math.max(1, N_L-1)/7);
+    if (t >= N_L-1){ t = N_L-1; stopPlay(); }
+  } else {
+    eps += dt * (EMAX/8);
+    if (eps >= EMAX){ eps = EMAX; stopPlay(); }
+  }
   setSlider(); render();
   if (playing) raf = requestAnimationFrame(tick);
 }
 playBtn.addEventListener("click", () => {
   if (playing){ stopPlay(); return; }
-  if (eps >= EMAX) eps = 0;
+  if (MODE === "trajectory"){ if (t >= N_L-1) t = 0; }
+  else { if (eps >= EMAX) eps = 0; }
   playing=true; lastT=0; playBtn.textContent="⏸ Pause";
   raf = requestAnimationFrame(tick);
 });
-document.getElementById("reset").addEventListener("click", () => { stopPlay(); eps=0; setSlider(); render(); });
+document.getElementById("reset").addEventListener("click", () => { stopPlay(); if (MODE==="trajectory") t=0; else eps=0; setSlider(); render(); });
 document.getElementById("resetview").addEventListener("click", () => { rx=-0.45; ry=0.7; render(); });
 
 document.getElementById("t-points").addEventListener("change", e=>{showPoints=e.target.checked; render();});
@@ -536,14 +751,14 @@ window.addEventListener("mousemove", e=>{
   lx=e.clientX; ly=e.clientY;
   render();
 });
-// touch
-scene.addEventListener("touchstart", e=>{const t=e.touches[0];dragging=true;lx=t.clientX;ly=t.clientY;},{passive:true});
+scene.addEventListener("touchstart", e=>{const p=e.touches[0];dragging=true;lx=p.clientX;ly=p.clientY;},{passive:true});
 scene.addEventListener("touchend", ()=>dragging=false);
-scene.addEventListener("touchmove", e=>{const t=e.touches[0];ry+=(t.clientX-lx)*0.01;rx+=(t.clientY-ly)*0.01;
-  rx=Math.max(-1.5,Math.min(1.5,rx)); lx=t.clientX; ly=t.clientY; render();},{passive:true});
+scene.addEventListener("touchmove", e=>{const p=e.touches[0];ry+=(p.clientX-lx)*0.01;rx+=(p.clientY-ly)*0.01;
+  rx=Math.max(-1.5,Math.min(1.5,rx)); lx=p.clientX; ly=p.clientY; render();},{passive:true});
 
 // ---- go ------------------------------------------------------------------
 fitAll();
+if (MODE === "trajectory"){ buildLegend(); t = N_L-1; }
 setSlider();
 render();
 </script>
@@ -556,6 +771,11 @@ def main() -> int:
     p = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
+    p.add_argument("--layers", nargs="?", const="all", default=None,
+                   help="layer/trajectory mode: treat transformer layers as time steps. "
+                        "Pass 'all' (or nothing) for all layers, a range 'start:stop[:step]', "
+                        "or a list '0,16,32,64'. Overrides --shape/--points.")
+    p.add_argument("--data-dir", default=None, help="transformer data dir (default: bundled capital_berlin_multilingual)")
     p.add_argument("--shape", default="torus-grid",
                    choices=["torus-grid", "circle", "donut", "product", "sphere", "blobs"],
                    help="synthetic source (default: torus-grid = exact T^2)")
@@ -574,14 +794,20 @@ def main() -> int:
     p.add_argument("--out", default="interactive.html", help="output HTML file")
     args = p.parse_args()
 
-    data = build_payload(args)
+    t0 = time.time()
+    if args.layers is not None:
+        data = build_layer_trajectory(args)
+    else:
+        data = build_payload(args)
     html = render_html(data).replace("__TITLE__", data["title"])
     out = Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(html, encoding="utf-8")
-    n_pts = len(data["points"])
-    print(f"wrote {out}  ({n_pts} points, {len(data['edges'])} edges, {len(data['faces'])} faces)")
-    print(f"   open it in a browser:  file://{out.resolve()}")
+    if data["mode"] == "trajectory":
+        print(f"wrote {out}  (trajectory: {data['n_tokens']} tokens x {data['n_layers']} layers)")
+    else:
+        print(f"wrote {out}  ({len(data['points'])} points, {len(data['edges'])} edges, {len(data['faces'])} faces)")
+    print(f"   open it in a browser:  file://{out.resolve()}   [{time.time()-t0:.1f}s]")
     return 0
 
 
