@@ -10,6 +10,7 @@ from vrtda.depth_persistence import (
     _match_chains,
     betti_heatmap,
     depth_chains,
+    depth_profile,
     stable_core,
     layer_barcodes,
 )
@@ -128,9 +129,9 @@ def test_synthetic_loop_persists_across_layers():
 
 def test_synthetic_loop_absent_in_middle_layer_breaks_at_gap1():
     lr = _synthetic_layer_results()  # loop present at layers 0,1,2
-    # collapse the square in layer 1 into a tiny 4-clique -> the hole gets filled,
-    # so the loop is absent there; with max_gap=1 the chain cannot bridge 0 -> 2
-    base1 = np.array([[0, 0], [0.1, 0], [0.1, 0.1], [0, 0.1]], float)
+    # spread the square's tokens far apart in layer 1 -> no edges, so no H_1 loop
+    # is present there; with max_gap=1 the chain cannot bridge 0 -> 2
+    base1 = np.array([[0, 0], [5, 0], [5, 5], [0, 5]], float)
     extra = np.array([[10, 10], [11, 10], [10, 11], [11, 11]], float) + np.arange(4)[:, None] * 3
     X1 = np.vstack([base1, extra])
     D = pairwise_distances(X1, "euclidean")

@@ -21,30 +21,6 @@ class Loop:
         return frozenset(self.vertices)
 
 
-def _path(u: int, v: int, parent: dict) -> list[int]:
-    seen = {}
-    cur = u
-    while cur is not None:
-        seen[cur] = True
-        cur = parent.get(cur)
-    lca = None
-    cur = v
-    while cur is not None and cur not in seen:
-        cur = parent.get(cur)
-    lca = cur
-    left, cur = [], u
-    while cur != lca:
-        left.append(cur)
-        cur = parent[cur]
-    left.append(lca)
-    right, cur = [], v
-    while cur != lca:
-        right.append(cur)
-        cur = parent[cur]
-    right.append(lca)
-    return left + right[::-1][1:]
-
-
 def _edges_from_path(path: list[int], u: int, v: int) -> set:
     es = set()
     for a, b in zip(path, path[1:]):
@@ -53,12 +29,37 @@ def _edges_from_path(path: list[int], u: int, v: int) -> set:
     return es
 
 
+def _tree_path(u: int, v: int, adj: dict) -> list[int]:
+    from collections import deque
+
+    prev = {u: None}
+    q = deque([u])
+    while q:
+        x = q.popleft()
+        if x == v:
+            break
+        for y in adj.get(x, ()):
+            if y not in prev:
+                prev[y] = x
+                q.append(y)
+    if v not in prev:
+        return []
+    path, cur = [], v
+    while cur is not None:
+        path.append(cur)
+        cur = prev[cur]
+    path.reverse()
+    return path
+
+
 def loops_1skeleton(complex, eps_max: float | None = None) -> list[Loop]:
     """Fundamental cycle basis of the 1-skeleton at eps_max (spanning-forest).
 
     Each independent 1-cycle is represented by the unique tree path between the
     endpoints of the edge that closes it, plus that edge. The closing edge's index
-    is the H_1 birth simplex, so this basis aligns with the persistence barcode."""
+    is the H_1 birth simplex, so this basis aligns with the persistence barcode.
+    A real forest adjacency (not just union-find roots) is kept so the path is a
+    genuine graph path of actual edges."""
     edges = []
     for j, s in enumerate(complex.simplexes):
         if complex.dims[j] == 1 and (eps_max is None or complex.values[j] <= eps_max + 1e-15):
@@ -67,20 +68,24 @@ def loops_1skeleton(complex, eps_max: float | None = None) -> list[Loop]:
     edges.sort(key=lambda e: (e[0], e[1]))
 
     parent: dict[int, int] = {}
+    adj: dict[int, list[int]] = {}
 
     def root(n: int) -> int:
-        while parent.get(n) is not None:
-            n = parent[n]
+        while parent.get(n, n) != n:
+            parent[n] = parent.get(parent[n], parent[n])
+            n = parent.get(n, n)
         return n
 
     loops: list[Loop] = []
     for value, idx, u, v in edges:
         ru, rv = root(u), root(v)
         if ru == rv:
-            path = _path(u, v, parent)
+            path = _tree_path(u, v, adj)
             loops.append(Loop(birth_simplex=idx, value=value, vertices=path, edges=_edges_from_path(path, u, v)))
         else:
             parent[ru] = rv
+            adj.setdefault(u, []).append(v)
+            adj.setdefault(v, []).append(u)
     return loops
 
 
