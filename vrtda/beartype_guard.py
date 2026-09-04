@@ -36,8 +36,15 @@ def beartype_function(func: types.FunctionType) -> types.FunctionType:
     return wrapped
 
 
+def _beartype_property(prop: "property") -> "property":
+    func = prop.fget
+    if func is None:
+        return prop
+    return property(fget=beartype_function(func), fset=prop.fset, fdel=prop.fdel, doc=prop.__doc__)
+
+
 def beartype_module(module: Any) -> None:
-    """Wrap all functions and non-dunder methods of ``module`` with beartype.
+    """Wrap all functions, methods and properties of ``module`` with beartype.
 
     ``module`` may be a module object or its name (a string). Idempotent:
     already-wrapped functions (marked ``__vrtda_beartyped__``) are left alone.
@@ -49,7 +56,9 @@ def beartype_module(module: Any) -> None:
             setattr(module, _name, beartype_function(obj))
         elif inspect.isclass(obj) and getattr(obj, "__module__", None) == module.__name__:
             for mname, mobj in list(vars(obj).items()):
-                if isinstance(mobj, types.FunctionType) and not mname.startswith("__"):
+                if isinstance(mobj, property):
+                    setattr(obj, mname, _beartype_property(mobj))
+                elif isinstance(mobj, types.FunctionType) and not mname.startswith("__"):
                     setattr(obj, mname, beartype_function(mobj))
 
 
