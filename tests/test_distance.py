@@ -25,9 +25,9 @@ def test_identical_zero():
 def test_single_vs_empty():
     a = bcd([(0.0, 5.0)])
     e = Barcode(intervals=[])
-    assert D.bottleneck(a, e, dim=1) == pytest.approx(2.5)  # L_inf height
+    assert D.bottleneck(a, e, dim=1) == pytest.approx(2.5)  # L_inf height = (d-b)/2
     assert D.p_wasserstein(a, e, dim=1, p=2) == pytest.approx(5.0 / math.sqrt(2))
-    assert D.p_wasserstein(a, e, dim=1, p=1) == pytest.approx(2.5)  # L1 height = (d-b)/2
+    assert D.p_wasserstein(a, e, dim=1, p=1) == pytest.approx(5.0)  # L1 height = d-b
 
 
 def test_far_apart_go_to_diagonal():
@@ -62,12 +62,14 @@ def test_bottleneck_triangle_inequality():
     assert d_ac <= d_ab + d_bc + 1e-12
 
 
-def test_wasserstein_monotone_in_p():
-    a = bcd([(0.0, 1.0), (0.5, 4.0), (2.0, 3.0)])
+def test_wasserstein_triangle_inequality():
+    a = bcd([(0.0, 1.0), (0.5, 4.0)])
     b = bcd([(0.2, 2.0), (1.0, 5.0)])
-    w1 = D.p_wasserstein(a, b, dim=1, p=1)
-    w2 = D.p_wasserstein(a, b, dim=1, p=2)
-    assert w1 <= w2 + 1e-9
+    c = bcd([(0.1, 3.0)])
+    w_ab = D.p_wasserstein(a, b, dim=1, p=2)
+    w_bc = D.p_wasserstein(b, c, dim=1, p=2)
+    w_ac = D.p_wasserstein(a, c, dim=1, p=2)
+    assert w_ac <= w_ab + w_bc + 1e-9
 
 
 def test_bottleneck_on_torus_grid():

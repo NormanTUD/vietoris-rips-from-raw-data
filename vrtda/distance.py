@@ -9,7 +9,8 @@ from vrtda.persistence_metrics import persistence_diagram
 
 
 def _points(bc: Barcode, dim: int = 1) -> np.ndarray:
-    return persistence_diagram(bc, dim)  # (n, 2) finite off-diagonal (birth, death)
+    d = persistence_diagram(bc, dim)  # (n, 2) finite off-diagonal (birth, death)
+    return np.zeros((0, 2)) if d.size == 0 else d
 
 
 def _heights(P: np.ndarray, p: float) -> np.ndarray:
