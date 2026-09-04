@@ -11,10 +11,15 @@ if ROOT not in sys.path:
 
 import pytest
 
+from vrtda.beartype_guard import beartype_module
+
 
 def main() -> int:
     args = sys.argv[1:] or ["-q"]
     return pytest.main([str(Path(ROOT) / "tests"), "-q", *args])
+
+
+beartype_module(__name__)
 
 
 if __name__ == "__main__":

@@ -1,6 +1,6 @@
 # /// script
 # requires-python = ">=3.10"
-# dependencies = ["numpy>=1.26"]
+# dependencies = ["numpy>=1.26", "beartype>=0.18"]
 # ///
 """End-to-end attractor analysis on the capital_berlin_multilingual data.
 
@@ -24,6 +24,7 @@ import json
 import numpy as np
 
 from vrtda import (
+    PointSet,
     pairwise_distances,
     build_rips,
     persistent_homology,
@@ -32,14 +33,17 @@ from vrtda import (
     reports,
     reduction,
 )
+from vrtda.beartype_guard import beartype_module
+from vrtda.complexes import FilteredComplex
+from vrtda.persistence import Barcode
 
 
-def _nn(D):
+def _nn(D: np.ndarray) -> float:
     d = D.copy(); np.fill_diagonal(d, np.inf)
     return float(d.min(1).mean())
 
 
-def layer_analysis(layer, metric, max_dim, frac):
+def layer_analysis(layer: int, metric: str, max_dim: int, frac: float) -> tuple[PointSet, Barcode, float, FilteredComplex]:
     ps = datasets.load_token_cloud(layer=layer)
     D = pairwise_distances(ps.data, metric)
     nn = _nn(D)
@@ -120,6 +124,9 @@ def main() -> int:
         plotting.plot_barcode(bc0.intervals, pdir / f"barcode_layer_{args.layers[0]:03d}.png")
         print(f"wrote plots to {pdir}")
     return 0
+
+
+beartype_module(__name__)
 
 
 if __name__ == "__main__":

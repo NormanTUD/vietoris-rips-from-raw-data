@@ -2,6 +2,7 @@
 # requires-python = ">=3.10"
 # dependencies = [
 #   "numpy>=1.26",
+#   "beartype>=0.18",
 # ]
 # ///
 import sys
@@ -13,6 +14,7 @@ if ROOT not in sys.path:
 
 import numpy as np
 import vrtda
+from vrtda.beartype_guard import beartype_module
 
 
 def main() -> int:
@@ -22,6 +24,9 @@ def main() -> int:
     assert abs(d[2] - np.sqrt(41.0)) < 1e-12
     print("OK", "vrtda", vrtda.__version__, "numpy", np.__version__)
     return 0
+
+
+beartype_module(__name__)
 
 
 if __name__ == "__main__":

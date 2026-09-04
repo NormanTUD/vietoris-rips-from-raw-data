@@ -13,14 +13,15 @@ if ROOT not in sys.path:
 import numpy as np
 
 import vrtda as V
+from vrtda.beartype_guard import beartype_module
 
 
-def nn(D):
+def nn(D: np.ndarray) -> float:
     d = D.copy(); np.fill_diagonal(d, np.inf)
     return float(d.min(1).mean())
 
 
-def betti_line(ps, metric, max_dim, lo, hi, n=12):
+def betti_line(ps: "V.PointSet", metric: str, max_dim: int, lo: float, hi: float, n: int = 12) -> tuple[float, int, list[tuple[int, ...]]]:
     D = V.pairwise_distances(ps.data, metric)
     nnn = nn(D)
     eps_max = hi * nnn
@@ -28,7 +29,7 @@ def betti_line(ps, metric, max_dim, lo, hi, n=12):
     bc = V.persistent_homology(C)
     eps = np.linspace(lo * nnn, hi * nnn, n)
     md = max(max_dim, bc.max_dim())
-    line = []
+    line: list[tuple[int, ...]] = []
     for e in eps:
         b = bc.betti_at(float(e))
         b = list(b) + [0] * (md + 1 - len(b))
@@ -36,7 +37,7 @@ def betti_line(ps, metric, max_dim, lo, hi, n=12):
     return nnn, C.n_simplices, line
 
 
-def show(title, ps, metric, max_dim, lo=0.9, hi=2.0):
+def show(title: str, ps: "V.PointSet", metric: str, max_dim: int, lo: float = 0.9, hi: float = 2.0) -> None:
     nnn, nsimp, line = betti_line(ps, metric, max_dim, lo, hi)
     print(f"\n== {title} == n={ps.n} dim={ps.dim} nn={nnn:.4g} nsimp={nsimp}")
     print("   eps-frac : " + "  ".join(f"{v:>6}" for v in np.linspace(lo, hi, 12).round(2)))
@@ -44,7 +45,7 @@ def show(title, ps, metric, max_dim, lo=0.9, hi=2.0):
         print(f"   b({lo + (hi-lo)*i/11:.2f}) : " + "  ".join(f"{v:>6}" for v in b))
 
 
-def main():
+def main() -> int:
     dd = V.datasets._data_root()
     layers = V.datasets.list_layers()
     print(f"layers: {layers[0]}..{layers[-1]} ({len(layers)} files)")
@@ -68,6 +69,9 @@ def main():
     print(f"\n== layer_points (5 layers) == n={lp.n} full_dim={lp.dim} -> 8d: n={lp8.n} dim={lp8.dim}")
     print("   sample labels:", lp.labels[:2], "...", lp.labels[-1])
     return 0
+
+
+beartype_module(__name__)
 
 
 if __name__ == "__main__":
