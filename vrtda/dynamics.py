@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 
 import numpy as np
 
@@ -16,7 +17,7 @@ class Convergence:
     max_dist: np.ndarray
 
 
-def convergence(data_dir=None) -> Convergence:
+def convergence(data_dir: str | Path | None = None) -> Convergence:
     """Final-token convergence statistics over depth (from convergence_analysis.csv)."""
     d = datasets.load_convergence(data_dir)
     return Convergence(
@@ -40,7 +41,7 @@ def _plateau_index(values: np.ndarray, rel: float = 0.2, after: int = 0) -> int:
     return len(values) - 1
 
 
-def convergence_summary(conv: Convergence, rel: float = 0.2) -> dict:
+def convergence_summary(conv: Convergence, rel: float = 0.2) -> dict[str, int | float]:
     """Characterise the depth-dynamics of the final (answer) tokens."""
     md = conv.mean_dist
     mp = conv.mean_pairwise
@@ -58,14 +59,17 @@ def convergence_summary(conv: Convergence, rel: float = 0.2) -> dict:
     }
 
 
-def _final_token_cloud(data_dir, layer) -> np.ndarray:
+def _final_token_cloud(data_dir: str | Path | None, layer: int) -> np.ndarray:
     """Positions of the final (answer) token of each prompt at a layer (n_prompts, D)."""
     ps = datasets.load_token_cloud(data_dir, layer)
     idx = datasets.final_token_indices(data_dir, layer)
     return ps.data[idx]
 
 
-def per_language_final_token_distance(data_dir=None, layers=None):
+def per_language_final_token_distance(
+    data_dir: str | Path | None = None,
+    layers: list[int] | None = None,
+) -> tuple[list[int], np.ndarray, list[object]]:
     """Per-layer, per-prompt distance of that prompt's answer token to the group
     centroid of all answer tokens. Returns (layers, matrix [n_prompts, n_layers],
     prompt_texts)."""
@@ -81,7 +85,7 @@ def per_language_final_token_distance(data_dir=None, layers=None):
     return layers, mat, prompts
 
 
-def flow_svd(data_dir=None, layers=None, n_components: int = 5):
+def flow_svd(data_dir: str | Path | None = None, layers: list[int] | None = None, n_components: int = 5) -> tuple[np.ndarray, np.ndarray, list[int]]:
     """SVD of the depth-trajectory of the answer-token centroid (the 'flow').
 
     Stacks the per-layer answer-token centroid vectors, centers them, and returns
@@ -96,7 +100,7 @@ def flow_svd(data_dir=None, layers=None, n_components: int = 5):
     return Vt[:k], var[:k], layers
 
 
-def attention_over_depth(data_dir=None, metric: str = "to_self", n_heads: int = 40):
+def attention_over_depth(data_dir: str | Path | None = None, metric: str = "to_self", n_heads: int = 40) -> tuple[list[int], np.ndarray, int]:
     """Mean attention metric over the answer tokens and all heads, per layer.
 
     Returns (layers, curve [n_layers], peak_layer). A rising self-attention on the
@@ -110,3 +114,8 @@ def attention_over_depth(data_dir=None, metric: str = "to_self", n_heads: int = 
     curve = mat[idx].mean(axis=(0, 2))
     peak = int(np.argmax(curve))
     return layers, curve, layers[peak]
+
+
+from vrtda.beartype_guard import beartype_module as _beartype_module
+
+_beartype_module(__name__)

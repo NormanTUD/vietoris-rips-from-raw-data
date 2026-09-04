@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 
 import numpy as np
 
 from vrtda import datasets
+from vrtda.beartype_guard import beartype_function
 from vrtda.complexes import build_rips
 from vrtda.distances import pairwise_distances
 from vrtda.persistence import persistent_homology
@@ -53,8 +55,8 @@ def _betti(X: np.ndarray, eps: float, max_dim: int = 2) -> tuple[int, int]:
 
 
 def mapper(
-    X,
-    phi,
+    X: np.ndarray,
+    phi: np.ndarray,
     n_bins: int = 8,
     overlap: float = 0.5,
     eps: float | None = None,
@@ -83,6 +85,7 @@ def mapper(
             return 0.0
         return float(eps_frac) * _mean_nn(pairwise_distances(sub, "euclidean"))
 
+    node_eps = beartype_function(node_eps)
     nodes: list[MapperNode] = []
     for (a, b) in intervals:
         idx = np.where((phi >= a) & (phi <= b))[0]
@@ -108,8 +111,15 @@ def mapper(
     return MapperGraph(nodes, edges)
 
 
-def mapper_residual(data_dir=None, layer: int = 0, n_bins: int = 8, overlap: float = 0.5,
-                    eps: float | None = None, eps_frac: float = 2.0, max_dim: int = 2) -> MapperGraph:
+def mapper_residual(
+    data_dir: str | Path | None = None,
+    layer: int = 0,
+    n_bins: int = 8,
+    overlap: float = 0.5,
+    eps: float | None = None,
+    eps_frac: float = 2.0,
+    max_dim: int = 2,
+) -> MapperGraph:
     """Mapper on a layer's token cloud with the residual norm as the lens."""
     ps = datasets.load_token_cloud(data_dir, layer)
     norms, _labels = datasets.load_residual_matrix(data_dir, "norms")
@@ -117,3 +127,8 @@ def mapper_residual(data_dir=None, layer: int = 0, n_bins: int = 8, overlap: flo
     L = int(layer)
     phi = norms[:, L]
     return mapper(ps.data, phi, n_bins=n_bins, overlap=overlap, eps=eps, eps_frac=eps_frac, max_dim=max_dim)
+
+
+from vrtda.beartype_guard import beartype_module as _beartype_module
+
+_beartype_module(__name__)
