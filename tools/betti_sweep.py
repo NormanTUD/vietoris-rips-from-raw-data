@@ -1,6 +1,6 @@
 # /// script
 # requires-python = ">=3.10"
-# dependencies = ["numpy>=1.26"]
+# dependencies = ["numpy>=1.26", "beartype>=0.18"]
 # ///
 """Sweep epsilon and print the Betti function beta_k(eps) for a point cloud."""
 import argparse
@@ -14,6 +14,7 @@ if ROOT not in sys.path:
 import numpy as np
 
 from vrtda import PointSet, pairwise_distances, build_rips, persistent_homology
+from vrtda.beartype_guard import beartype_module
 
 
 def _nn_mean(D: np.ndarray) -> float:
@@ -65,6 +66,9 @@ def main() -> int:
         print(f"wrote {args.out}")
     print(f"n={ps.n} dim={ps.dim} metric={args.metric} nn={nn:.4g} eps=[{lo:.4g},{hi:.4g}] nsimp={C.n_simplices}")
     return 0
+
+
+beartype_module(__name__)
 
 
 if __name__ == "__main__":

@@ -58,5 +58,8 @@ def main() -> int:
     return 0
 
 
+beartype_module(__name__)
+
+
 if __name__ == "__main__":
     raise SystemExit(main())

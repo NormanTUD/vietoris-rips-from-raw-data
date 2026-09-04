@@ -1,6 +1,6 @@
 # /// script
 # requires-python = ">=3.10"
-# dependencies = ["numpy>=1.26"]
+# dependencies = ["numpy>=1.26", "beartype>=0.18"]
 # ///
 """Project a point cloud via feature-selection + dimensionality reduction.
 
@@ -18,9 +18,10 @@ if ROOT not in sys.path:
 import numpy as np
 
 from vrtda import PointSet, datasets, reduction
+from vrtda.beartype_guard import beartype_module
 
 
-def load_points(args) -> PointSet:
+def load_points(args: argparse.Namespace) -> PointSet:
     if args.points:
         return PointSet.from_csv(
             args.points,
@@ -100,6 +101,9 @@ def main() -> int:
         print(f"wrote {args.out_report}")
     print("\n".join(report))
     return 0
+
+
+beartype_module(__name__)
 
 
 if __name__ == "__main__":

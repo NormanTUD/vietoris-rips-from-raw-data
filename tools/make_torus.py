@@ -1,6 +1,6 @@
 # /// script
 # requires-python = ">=3.10"
-# dependencies = ["numpy>=1.26"]
+# dependencies = ["numpy>=1.26", "beartype>=0.18"]
 # ///
 """Generate a ground-truth point cloud CSV for TDA validation."""
 import argparse
@@ -14,9 +14,10 @@ if ROOT not in sys.path:
 import numpy as np
 
 from vrtda import PointSet, generators as G
+from vrtda.beartype_guard import beartype_module
 
 
-def build(args) -> np.ndarray:
+def build(args: argparse.Namespace) -> np.ndarray:
     if args.kind == "circle":
         if args.grid:
             return G.circle_grid(args.n, radius=args.radius)
@@ -53,6 +54,9 @@ def main() -> int:
     ps.to_csv(args.out)
     print(f"wrote {args.out}: n={ps.n} dim={ps.dim}")
     return 0
+
+
+beartype_module(__name__)
 
 
 if __name__ == "__main__":

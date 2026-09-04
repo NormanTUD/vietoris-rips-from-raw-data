@@ -1,6 +1,6 @@
 # /// script
 # requires-python = ">=3.10"
-# dependencies = ["numpy>=1.26"]
+# dependencies = ["numpy>=1.26", "beartype>=0.18"]
 # ///
 """Detect and compare persistent 'attractor' features across point clouds.
 
@@ -26,14 +26,16 @@ from vrtda import (
     datasets,
     attractors,
 )
+from vrtda.beartype_guard import beartype_module
+from vrtda.persistence import Barcode
 
 
-def _nn_mean(D):
+def _nn_mean(D: np.ndarray) -> float:
     d = D.copy(); np.fill_diagonal(d, np.inf)
     return float(d.min(1).mean())
 
 
-def _barcode_for(pts: np.ndarray, metric: str, max_dim: int, frac: float):
+def _barcode_for(pts: np.ndarray, metric: str, max_dim: int, frac: float) -> tuple[Barcode, float, int]:
     D = pairwise_distances(pts, metric)
     nn = _nn_mean(D)
     eps_max = frac * nn
@@ -41,8 +43,8 @@ def _barcode_for(pts: np.ndarray, metric: str, max_dim: int, frac: float):
     return persistent_homology(C), eps_max, C.n_simplices
 
 
-def collect_clouds(args):
-    clouds = {}
+def collect_clouds(args: argparse.Namespace) -> dict[str, np.ndarray]:
+    clouds: dict[str, np.ndarray] = {}
     if args.layers is not None:
         for L in args.layers:
             ps = datasets.load_token_cloud(layer=L)
@@ -105,10 +107,13 @@ def main() -> int:
     return 0
 
 
-def _fmt(v, c):
+def _fmt(v: object, c: str) -> str:
     if isinstance(v, float):
         return f"{v:.4g}"
     return str(v)
+
+
+beartype_module(__name__)
 
 
 if __name__ == "__main__":
