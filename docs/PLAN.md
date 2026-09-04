@@ -95,15 +95,30 @@ Libs (siehe Architektur) + pytest-Suite (87 Tests, grün). **Validiert:**
       **Beobachtung:** Residual-Norm-Trajektorien sind ≈ rank-1 (evr[0]≈1); Token-Cloud
       Top-64-Dims → 3 PCs erklären ~58%.
 
-### Phase 4 — Attraktor-Analyse 🕐
-- [ ] Persistente, langlebige Features auf den reduzierten Token-Clouds.
-- [ ] Vergleich über Layer (Tiefe): wie entstehen/verlassen sich Merkmale?
-- [ ] Vergleich über Prompts/Sprachen (multilingual).
-- [ ] Metriken: Persistenz-Fläche, Anzahl essentieller Intervalle, ε-Banden.
+### Phase 4 — Attraktor-Analyse ✅
+- [x] `vrtda/attractors.py`: „Attraktor“ = persistente/langlebige Feature.
+      `essential_intervals`, `long_lived_intervals` (Schwelle als Bruch von eps_max),
+      `total_persistence` (Persistenz-Landschafts-Proxy), `per_dim_summary`, `compare`.
+- [x] `tools/attractors.py`: Vergleich über Layer (`--layers`), CSVs (`--csvs`),
+      residual_norms; Report-CSV.
+- [x] `tests/test_attractors.py` (8 Tests).
+- [x] Echte Daten: Trend über Tiefe. **Beobachtung:** `b1_essential` (persistente Loops)
+      taucht in mittleren Schichten auf (Layer 48: 7), `b0_essential` wächst mit der Tiefe
+      (1 → 12/16). Multilingual-Prompt-Vergleich als nächster Ausbauschritt.
 
-### Phase 5 — Reports & Beispiel 🕐
-- [ ] End-to-End-Beispiel-Skript (`examples/`).
-- [ ] Reports (CSV/Text) + optional 2D/3D-Visualisierung der Clouds & Barcodes.
+### Phase 5 — Reports & Beispiel ✅
+- [x] `vrtda/reports.py`: `Report` (Markdown/Text, Sections + Tabellen), `betti_table`.
+- [x] `vrtda/plotting.py`: optionales Plotting (lazy matplotlib): `plot_betti_function`,
+      `plot_barcode`, `plot_point_cloud_2d`. Ohne matplotlib → klare `DataError`.
+- [x] `examples/attractor_analysis.py`: End-to-End (load → Rips → Persistenz → Attraktoren
+      → Markdown-Report + optional Plots). Erzeugt `examples/report.md`.
+- [x] `tests/test_reports.py`, `tests/test_plotting.py`.
+
+## Status: Phasen 0–5 abgeschlossen
+Vollständiger, modularer, getesteter Stack (121 Tests, grün). Nächste sinnvolle Ausbaustufen:
+- Multilingual-Prompt-Vergleich (12 Prompts als separate Clouds → Attraktoren pro Sprache).
+- `layer_points`-Trajektorien-Analyse (token × layer) mit DR.
+- UMAP/t-SNE-Pipeline für die 5120d Token-Clouds (Deps: `umap-learn`, `scikit-learn`).
 
 ## Laufbefehle
 

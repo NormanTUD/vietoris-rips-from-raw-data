@@ -30,11 +30,15 @@ def test_essential_counts_torus():
 def test_long_lived_threshold():
     bc = persistent_homology(_cycle())
     eps_max = 1.0
-    # at min_length=0 all 4 intervals (3 H0 + 1 H1)
+    # intervals: 3 H0 (essential len=1.0, two finite len=1.0) + 1 H1 loop (born@1.0 -> capped len 0.0)
     assert len(A.long_lived_intervals(bc, 0.0, eps_max=eps_max)) == 4
-    # the loop has length inf (capped to eps_max=1.0) -> always long-lived
-    # H0 finite intervals have length 1.0 each; with min_length just above 1.0 only essentials remain
-    assert len(A.long_lived_intervals(bc, 1.0 + 1e-9, eps_max=eps_max)) == 2  # the 2 essentials
+    assert len(A.long_lived_intervals(bc, 0.0, eps_max=eps_max, dim=0)) == 3
+    # threshold 0.5 excludes only the zero-length loop
+    assert len(A.long_lived_intervals(bc, 0.5, eps_max=eps_max)) == 3
+    # monotonic in the threshold
+    lo = len(A.long_lived_intervals(bc, 0.2, eps_max=eps_max))
+    hi = len(A.long_lived_intervals(bc, 0.8, eps_max=eps_max))
+    assert lo >= hi
 
 
 def test_total_persistence_nonneg():
