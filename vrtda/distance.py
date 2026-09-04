@@ -8,9 +8,15 @@ from vrtda.persistence import Barcode
 from vrtda.persistence_metrics import persistence_diagram
 
 
-def _points(bc: Barcode, dim: int = 1) -> np.ndarray:
+def _points(bc: Barcode, dim: int = 1, top_k: int | None = None) -> np.ndarray:
     d = persistence_diagram(bc, dim)  # (n, 2) finite off-diagonal (birth, death)
-    return np.zeros((0, 2)) if d.size == 0 else d
+    if d.size == 0:
+        return np.zeros((0, 2))
+    if top_k is not None and len(d) > top_k:
+        pers = d[:, 1] - d[:, 0]
+        idx = np.argsort(-pers)[:top_k]
+        d = d[idx]
+    return d
 
 
 def _heights(P: np.ndarray, p: float) -> np.ndarray:
@@ -112,10 +118,12 @@ def _bottleneck_feasible(P: np.ndarray, Q: np.ndarray, v: float) -> bool:
     return _edmonds_karp(M, adj, SS, TT) == total
 
 
-def bottleneck(bc1: Barcode, bc2: Barcode, dim: int = 1) -> float:
+def bottleneck(bc1: Barcode, bc2: Barcode, dim: int = 1, top_k: int | None = None) -> float:
     """Bottleneck distance between the off-diagonal persistence diagrams of two
-    barcodes (unmatched points may go to the diagonal)."""
-    P, Q = _points(bc1, dim), _points(bc2, dim)
+    barcodes (unmatched points may go to the diagonal). `top_k` restricts each
+    diagram to its k most persistent points (faster, and compares the salient
+    features rather than the ~thousands of short-lived ones)."""
+    P, Q = _points(bc1, dim, top_k), _points(bc2, dim, top_k)
     if len(P) == 0 and len(Q) == 0:
         return 0.0
     cands = {0.0}
@@ -131,12 +139,13 @@ def bottleneck(bc1: Barcode, bc2: Barcode, dim: int = 1) -> float:
     return float(max(cands))
 
 
-def p_wasserstein(bc1: Barcode, bc2: Barcode, dim: int = 1, p: float = 2.0) -> float:
+def p_wasserstein(bc1: Barcode, bc2: Barcode, dim: int = 1, p: float = 2.0, top_k: int | None = None) -> float:
     """p-Wasserstein distance between two persistence diagrams (diagonal allowed).
 
-    Uses the standard persdiagram cost matrix + Hungarian matching. Requires scipy
-    for larger diagrams; a brute-force fallback covers very small ones."""
-    P, Q = _points(bc1, dim), _points(bc2, dim)
+    Uses the standard persdiagram cost matrix + Hungarian matching. `top_k`
+    restricts each diagram to its k most persistent points. Requires scipy for
+    larger diagrams; a brute-force fallback covers very small ones."""
+    P, Q = _points(bc1, dim, top_k), _points(bc2, dim, top_k)
     n1, n2 = len(P), len(Q)
     if n1 == 0 and n2 == 0:
         return 0.0

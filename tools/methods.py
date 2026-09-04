@@ -106,12 +106,16 @@ def cmd_distance(args):
     nb, pb = _cloud(args, "b")
     bca, _ = _barcode(pa.data, args.metric, args.max_dim, args.frac)
     bcb, _ = _barcode(pb.data, args.metric, args.max_dim, args.frac)
-    print(f"[distance] {na} vs {nb}  (dim={args.dim})")
+    print(f"[distance] {na} vs {nb}  (dim={args.dim}, top_k={args.top_k})")
     for which in args.which:
         if which == "bottleneck":
-            print(f"  bottleneck        = {dist.bottleneck(bca, bcb, args.dim):.6g}")
+            print(f"  bottleneck        = {dist.bottleneck(bca, bcb, args.dim, args.top_k):.6g}")
         elif which == "wasserstein":
-            print(f"  wasserstein(p={args.p}) = {dist.p_wasserstein(bca, bcb, args.dim, args.p):.6g}")
+            try:
+                w = dist.p_wasserstein(bca, bcb, args.dim, args.p, args.top_k)
+                print(f"  wasserstein(p={args.p}) = {w:.6g}")
+            except ImportError:
+                print(f"  wasserstein(p={args.p}) = <needs scipy: uv run --with scipy tools/methods.py ...>")
     return 0
 
 
@@ -244,6 +248,7 @@ def main() -> int:
     sp.add_argument("--b-csv", default=None)
     sp.add_argument("--which", nargs="*", default=["bottleneck", "wasserstein"])
     sp.add_argument("--p", type=float, default=2.0)
+    sp.add_argument("--top-k", type=int, default=20, help="restrict each diagram to its k most persistent points")
     sp.set_defaults(fn=cmd_distance)
 
     sp = sub.add_parser("depth", help=METHODS["depth"])
