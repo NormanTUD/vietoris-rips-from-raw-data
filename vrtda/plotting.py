@@ -144,7 +144,7 @@ def plot_persistence_summary(
         g = [iv for iv in ivs if iv.dim == dim]
         xs = [iv.birth for iv in g]
         ys = [cdeath(iv) for iv in g]
-        ax_diag.scatter(xs, ys, s=16, c=cmap(k / 10.0), label=f"$H_{dim}$", edgecolors="k", linewidths=0.3)
+        ax_diag.scatter(xs, ys, s=16, color=cmap(k / 10.0), label=f"$H_{dim}$", edgecolors="k", linewidths=0.3)
     ax_diag.plot([0, eps_max], [0, eps_max], "k--", lw=0.8, alpha=0.5)
     ax_diag.set_xlim(0, eps_max)
     ax_diag.set_ylim(0, eps_max)
