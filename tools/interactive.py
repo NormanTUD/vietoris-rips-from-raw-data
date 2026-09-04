@@ -271,7 +271,7 @@ def build_layer_trajectory(args: argparse.Namespace) -> dict[str, object]:
         "layers": [int(L) for L in layers],
         "n_tokens": ntok,
         "token_labels": labels,
-        "traj": [[[round(float(v), 1) for v in row] for row in traj[t]] for t in range(ntok)],
+        "traj": [[[round(float(v), 1) for v in row] for row in traj.transpose(1, 0, 2)[tok]] for tok in range(ntok)],
         "spread": [round(float(v), 3) for v in spread],
         "group_of": group_of,
         "prompt_labels": ptexts,
