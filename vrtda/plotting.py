@@ -1,11 +1,18 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
+from pathlib import Path
+from typing import Any
+
 import numpy as np
 
+from vrtda.dynamics import Convergence
 from vrtda.errors import DataError
+from vrtda.mapper import MapperGraph
+from vrtda.persistence import Interval
 
 
-def _mpl():
+def _mpl() -> Any:
     try:
         import matplotlib
 
@@ -19,7 +26,7 @@ def _mpl():
     return plt
 
 
-def plot_betti_function(epsilons, betti_arr, path, title="Betti function") -> None:
+def plot_betti_function(epsilons: Sequence[float] | np.ndarray, betti_arr: np.ndarray, path: str | Path, title: str = "Betti function") -> None:
     plt = _mpl()
     epsilons = np.asarray(epsilons)
     betti_arr = np.asarray(betti_arr)
@@ -36,7 +43,7 @@ def plot_betti_function(epsilons, betti_arr, path, title="Betti function") -> No
     plt.close(fig)
 
 
-def plot_barcode(intervals, path, title="Persistence barcode") -> None:
+def plot_barcode(intervals: list[Interval], path: str | Path, title: str = "Persistence barcode") -> None:
     """intervals: list of Interval (with .dim, .birth, .death)."""
     plt = _mpl()
     finite = [iv for iv in intervals if np.isfinite(iv.death)]
@@ -58,7 +65,7 @@ def plot_barcode(intervals, path, title="Persistence barcode") -> None:
     plt.close(fig)
 
 
-def plot_point_cloud_2d(pts, path, labels=None, title="Point cloud") -> None:
+def plot_point_cloud_2d(pts: np.ndarray, path: str | Path, labels: list[str] | None = None, title: str = "Point cloud") -> None:
     plt = _mpl()
     pts = np.asarray(pts, dtype=np.float64)
     if pts.shape[1] < 2:
@@ -75,7 +82,7 @@ def plot_point_cloud_2d(pts, path, labels=None, title="Point cloud") -> None:
     plt.close(fig)
 
 
-def plot_persistence_diagram(diagram, path, title="Persistence diagram") -> None:
+def plot_persistence_diagram(diagram: np.ndarray, path: str | Path, title: str = "Persistence diagram") -> None:
     """diagram: (n, 2) array of (birth, death) off-diagonal points."""
     plt = _mpl()
     diagram = np.asarray(diagram, dtype=np.float64)
@@ -93,7 +100,7 @@ def plot_persistence_diagram(diagram, path, title="Persistence diagram") -> None
     plt.close(fig)
 
 
-def plot_persistence_landscape(xgrid, F, path, title="Persistence landscape") -> None:
+def plot_persistence_landscape(xgrid: np.ndarray, F: np.ndarray, path: str | Path, title: str = "Persistence landscape") -> None:
     """F: (n_levels, len(xgrid)); plots the top few landscape levels."""
     plt = _mpl()
     xgrid = np.asarray(xgrid)
@@ -111,7 +118,7 @@ def plot_persistence_landscape(xgrid, F, path, title="Persistence landscape") ->
     plt.close(fig)
 
 
-def plot_persistence_image(img, path, title="Persistence image") -> None:
+def plot_persistence_image(img: np.ndarray, path: str | Path, title: str = "Persistence image") -> None:
     plt = _mpl()
     img = np.asarray(img)
     fig, ax = plt.subplots(figsize=(6, 6))
