@@ -26,28 +26,28 @@ def _lp_matrix(A: np.ndarray, B: np.ndarray, p: float) -> np.ndarray:
 def _edmonds_karp(N: int, adj: list, s: int, t: int) -> int:
     flow = 0
     while True:
-        parent = [-1] * N
+        parent = [-1] * N  # parent[v] = (u, i) with i = index of forward edge in adj[u]
         parent[s] = s
         q = deque([s])
         while q and parent[t] == -1:
             u = q.popleft()
-            for (v, cap, ri) in adj[u]:
+            for i, (v, cap, _rev) in enumerate(adj[u]):
                 if cap > 0 and parent[v] == -1:
-                    parent[v] = (u, ri)
+                    parent[v] = (u, i)
                     q.append(v)
         if parent[t] == -1:
             break
-        # find bottleneck
         path = []
         v = t
         while v != s:
-            u, ri = parent[v]
-            path.append((u, v, ri))
+            u, i = parent[v]
+            path.append((u, i))
             v = u
-        bot = min(adj[u][ri][1] for (u, v, ri) in path)
-        for (u, v, ri) in path:
-            adj[u][ri][1] -= bot
-            adj[v][ri + 1][1] += bot
+        bot = min(adj[u][i][1] for (u, i) in path)
+        for (u, i) in path:
+            v = adj[u][i][0]
+            adj[u][i][1] -= bot
+            adj[v][adj[u][i][2]][1] += bot
         flow += bot
     return flow
 
