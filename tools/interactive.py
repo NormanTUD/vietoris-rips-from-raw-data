@@ -81,6 +81,15 @@ def _torus_surface(nu: int, nv: int, R: float = 1.0, r: float = 0.35) -> np.ndar
 
 def build_source(args: argparse.Namespace) -> tuple[FilteredComplex, np.ndarray, str, list[int] | None]:
     """Return (complex, display_points_3d, projection_label, target_betti_or_None)."""
+    if args.points is not None:
+        # Rips on an arbitrary point cloud (any dimension; PCA-projected if > 3D)
+        X = PointSet.from_csv(args.points, value_cols=args.value_cols, index_cols=args.index_cols).data
+        D = pairwise_distances(X, args.metric)
+        eps_max = args.frac * _nn(D)
+        C = build_rips(X, D, eps_max, max_dim=args.max_dim)
+        pts, proj = _to3d(X, "rips")
+        return C, pts, proj, None
+
     if args.shape == "torus-grid":
         nu = args.n
         C = make_torus_grid_complex(2, (nu, nu))
@@ -108,11 +117,8 @@ def build_source(args: argparse.Namespace) -> tuple[FilteredComplex, np.ndarray,
         pts = _torus_surface(nu, nu)
         return C, pts, "torus-grid surface (exact T^2 cell complex)", [1, 2, 1]
 
-    # Rips-based sources
-    if args.points is not None:
-        X = PointSet.from_csv(args.points, value_cols=args.value_cols, index_cols=args.index_cols).data
-        src = Path(args.points).stem
-    elif args.shape == "circle":
+    # Rips-based synthetic sources
+    if args.shape == "circle":
         X = G.circle_grid(args.n, radius=1.0); src = f"circle ({args.n} pts)"
     elif args.shape == "donut":
         X = G.donut_grid(args.nper, args.nper); src = f"donut surface ({args.nper}x{args.nper})"
