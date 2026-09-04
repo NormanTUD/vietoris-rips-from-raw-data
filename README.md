@@ -241,11 +241,12 @@ Data loaders live in `vrtda/datasets.py` (`load_token_cloud`, `load_layer_points
 
 ## Running the tests
 
-```bash
-uv run tools/run_tests.py            # all 121 tests
-uv run tools/run_tests.py -k torus   # only tests matching "torus"
-uv run tools/run_tests.py -k reduction -v
-```
+ ```bash
+ uv run tools/run_tests.py            # all 170 tests
+ uv run tools/run_tests.py -k torus   # only tests matching "torus"
+ uv run tools/run_tests.py -k depth   # cross-layer attractor tests
+ uv run tools/run_tests.py -k reduction -v
+ ```
 
 The suite validates the whole algebra on exact ground truth: abstract complexes
 (disk, sphere, solid tetrahedron, T², T³) give exact Betti numbers with
@@ -270,14 +271,20 @@ vrtda/                  # the library
   generators.py         # synthetic data: circle, (S^1)^k, donut, sphere, blobs, grids
   datasets.py           # loaders for the bundled transformer data
   reduction.py          # PCA (numpy), top-variance feature selection, UMAP/t-SNE (optional)
-  attractors.py         # essential / long-lived / total-persistence metrics
-  reports.py            # markdown / text report builder
-  plotting.py           # optional matplotlib plotting
-  errors.py, debug.py   # error hierarchy, opt-in --debug / VR_DEBUG logging
+   attractors.py         # essential / long-lived / total-persistence metrics
+   persistence_metrics.py # entropy / landscape / persistence image
+   distance.py           # bottleneck + p-Wasserstein between barcodes
+   cocycles.py           # extract the concrete 1-cycles (loops) behind H_1 classes
+   depth_persistence.py  # cross-LAYER attractors: heatmap, chains, stable core, profile
+   mapper.py             # 1D Mapper (lens -> Rips per bin -> betti)
+   dynamics.py           # convergence, per-language, flow-SVD, attention-over-depth
+   reports.py            # markdown / text report builder
+   plotting.py           # optional matplotlib plotting (diagrams, heatmaps, overlay, ...)
+   errors.py, debug.py   # error hierarchy, opt-in --debug / VR_DEBUG logging
 tools/                  # PEP 723 command-line tools
-  analyze.py  make_torus.py  betti_sweep.py  barcodes.py  project.py
-  attractors.py  plot.py  load_smoke.py  run_tests.py
-tests/                  # pytest suite (121 tests)
+   analyze.py  make_torus.py  betti_sweep.py  barcodes.py  project.py
+   attractors.py  plot.py  methods.py  load_smoke.py  run_tests.py
+tests/                  # pytest suite (170 tests)
 examples/               # end-to-end example + generated report.md
 docs/                   # MATH.md (formal math + refs), PLAN.md (roadmap)
 capital_berlin_multilingual/   # bundled data (git-ignored)
@@ -306,9 +313,22 @@ capital_berlin_multilingual/   # bundled data (git-ignored)
 - **Persistent homology:** computed over `GF(2)` by column reduction of the boundary
   maps; each topological feature is an interval `[birth, death)`. *Essential* features
   (never die) are the stable ones; **attractors** = essential + long-lived features.
-- **Betti numbers:** `β_k(ε)` counts features alive at scale ε.
+ - **Betti numbers:** `β_k(ε)` counts features alive at scale ε.
+ - **Persistence metrics:** entropy (`-Σpᵢ log pᵢ`), the Cohen–Stein *landscape*
+   (tents over sorted persistence values), and Bubenik's *persistence image*.
+ - **Diagram distances:** *bottleneck* (min over matchings of the max L∞ move,
+   unmatched → diagonal) and *p-Wasserstein* (optimal transport to the diagonal).
+ - **Cross-layer (depth) persistence:** the 81 tokens keep a fixed identity across
+   layers, so a loop recurring in consecutive layers (matched by token-set overlap)
+   is an attractor persisting in *depth*; reported as chains with a layer span, plus
+   a (relative-scale × layer) Betti heatmap and a stable core.
+ - **Mapper** (Carlsson): lens → overlapping bins → Rips per bin → β₁ per node;
+   nodes linked when their overlap is connected.
+ - **Dynamical attractors:** answer-token convergence over depth, per-language
+   centroid distance, SVD of the centroid trajectory (≈rank-1 flow), self-attention
+   on the answer token over depth.
 
-Full derivations, the MEB construction, and nLab references: **`docs/MATH.md`**.
+ Full derivations, the MEB construction, and nLab references: **`docs/MATH.md`**.
 
 ---
 

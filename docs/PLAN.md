@@ -112,10 +112,35 @@ Libs (siehe Architektur) + pytest-Suite (87 Tests, grün). **Validiert:**
       `plot_barcode`, `plot_point_cloud_2d`. Ohne matplotlib → klare `DataError`.
 - [x] `examples/attractor_analysis.py`: End-to-End (load → Rips → Persistenz → Attraktoren
       → Markdown-Report + optional Plots). Erzeugt `examples/report.md`.
-- [x] `tests/test_reports.py`, `tests/test_plotting.py`.
+ - [x] `tests/test_reports.py`, `tests/test_plotting.py`.
 
-## Status: Phasen 0–5 abgeschlossen
-Vollständiger, modularer, getesteter Stack (121 Tests, grün). Nächste sinnvolle Ausbaustufen:
+### Phase 6 — Attraktor-Methoden (Auswahl, alle optional) ✅
+Motivation: Attraktoren können über **viele Layer hinweg** persistieren. Da alle 81
+Tokens eine fixe Identität über die Tiefe behalten (nur Embeddings ändern sich), ist
+„Persistenz in der Tiefe" auf einem festen Simplexraum wohldefiniert.
+ - [x] `vrtda/persistence_metrics.py`: Entropie, Cohen–Stein-Landscape, Persistence Image.
+ - [x] `vrtda/distance.py`: Bottleneck (Binärsuche + Max-Flow-Feasibility) und p-Wasserstein
+       (persdiagram-Kosten + Hungarian, `scipy` optional; `top_k`-Filter für ~10⁻³–10⁴ Intervalle).
+ - [x] `vrtda/cocycles.py`: konkrete 1-Zyklen (Loop-Token-Sets) via spanning-forest-Cycle-Basis
+       (BFS-Pfad; stimmt mit `birth_simplex` des Barcodes überein).
+ - [x] `vrtda/depth_persistence.py`: Cross-Layer-Attraktoren — pro-Layer-Relativmaßstab (×nn),
+       (Skala × Layer)-Betti-Heatmap, Depth-Chains (Matching über Token-Overlap, mit Gaps),
+       Stable Core, Depth-Profil.
+ - [x] `vrtda/mapper.py`: 1D-Mapper (Lens → überlappende Bins → Rips pro Bin → β₁, Kanten bei
+       konnexer Überlappung).
+ - [x] `vrtda/dynamics.py`: Konvergenz der Antwort-Tokens, per-Sprache-Centroid-Distanz,
+       Flow-SVD der Centroid-Trajektorie (≈rank-1), Self-Attention auf Antwort-Tokene über Tiefe.
+ - [x] `vrtda/plotting.py`: Diagram, Landscape, Image, Depth-Heatmap, Betti-über-Tiefe,
+       Mapper-Graph, Attractor-Overlay, Konvergenz.
+ - [x] `tools/methods.py`: einheitliche, wählbare CLI (`--list`, Subcommands, alle Params optional).
+ - [x] Tests: `test_persistence_metrics`, `test_distance`, `test_cocycles`,
+       `test_depth_persistence`, `test_mapper`, `test_dynamics` (Suite auf 170 Tests).
+
+Empirisch: H₁-Loops persistieren über konsekutive Layer und enthalten die mehrsprachigen
+„capital/Germany"-Tokens; die Antwort-Tokens aller 12 Sprachen konvergieren am finalen Layer.
+
+## Status: Phasen 0–6 abgeschlossen
+Vollständiger, modularer, getesteter Stack (170 Tests, grün). Nächste sinnvolle Ausbaustufen:
 - Multilingual-Prompt-Vergleich (12 Prompts als separate Clouds → Attraktoren pro Sprache).
 - `layer_points`-Trajektorien-Analyse (token × layer) mit DR.
 - UMAP/t-SNE-Pipeline für die 5120d Token-Clouds (Deps: `umap-learn`, `scikit-learn`).
