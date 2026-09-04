@@ -1,3 +1,7 @@
+from __future__ import annotations
+
+from pathlib import Path
+
 import numpy as np
 import pytest
 
@@ -8,16 +12,17 @@ from vrtda.barcodes import (
     load_barcode_csv,
     persistence_summary_csv,
 )
+from vrtda.beartype_guard import beartype_module
 
 
-def _cycle():
+def _cycle() -> FilteredComplex:
     return FilteredComplex.from_explicit([
         (0.0, 0, (0,)), (0.0, 0, (1,)), (0.0, 0, (2,)),
         (1.0, 1, (0, 1)), (1.0, 1, (1, 2)), (1.0, 1, (2, 0)),
     ])
 
 
-def test_barcode_to_rows():
+def test_barcode_to_rows() -> None:
     bc = persistent_homology(_cycle())
     rows = barcode_to_rows(bc)
     assert rows
@@ -28,7 +33,7 @@ def test_barcode_to_rows():
     assert "inf" in deaths
 
 
-def test_csv_roundtrip(tmp_path):
+def test_csv_roundtrip(tmp_path: Path) -> None:
     bc = persistent_homology(_cycle())
     p = save_barcode_csv(bc, tmp_path / "bar.csv")
     back = load_barcode_csv(p)
@@ -40,14 +45,14 @@ def test_csv_roundtrip(tmp_path):
         assert bc.betti_at(eps) == back.betti_at(eps)
 
 
-def test_csv_preserves_essential(tmp_path):
+def test_csv_preserves_essential(tmp_path: Path) -> None:
     bc = persistent_homology(_cycle())
     p = save_barcode_csv(bc, tmp_path / "bar.csv")
     back = load_barcode_csv(p)
     assert len([iv for iv in back.of_dim(1) if iv.is_essential]) == 1
 
 
-def test_summary_csv(tmp_path):
+def test_summary_csv(tmp_path: Path) -> None:
     from vrtda.complexes import make_torus_grid_complex
     C = make_torus_grid_complex(2, (3, 3))
     bc = persistent_homology(C)
@@ -62,6 +67,9 @@ def test_summary_csv(tmp_path):
     assert int(d2["essential"]) == 1
 
 
-def test_load_missing_file():
+def test_load_missing_file() -> None:
     with pytest.raises(Exception):
         load_barcode_csv("/nonexistent/bar.csv")
+
+
+beartype_module(__name__)
