@@ -76,4 +76,4 @@ def assert_debug(cond: bool, msg: str) -> None:
 
 from vrtda.beartype_guard import beartype_module as _beartype_module
 
-_beartype_module(sys.modules[__name__])
+_beartype_module(__name__)

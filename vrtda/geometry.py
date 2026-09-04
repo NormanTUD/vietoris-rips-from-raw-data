@@ -7,7 +7,7 @@ import numpy as np
 from vrtda.errors import DataError
 
 
-def _circumcenter(T: np.ndarray):
+def _circumcenter(T: np.ndarray) -> tuple[np.ndarray | None, float | None]:
     """Center and radius of the unique sphere through the affinely independent
     points T, computed as the minimum-radius equidistant center in the affine
     hull. Returns (None, None) if T is affinely dependent."""
@@ -70,3 +70,8 @@ def min_enclosing_ball(pts: np.ndarray) -> tuple[np.ndarray, float]:
             if float(dists.max()) <= r + 1e-9 * max(1.0, r):
                 best_c, best_r = c, r
     return best_c, best_r
+
+
+from vrtda.beartype_guard import beartype_module as _beartype_module
+
+_beartype_module(__name__)

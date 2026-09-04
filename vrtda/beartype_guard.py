@@ -9,7 +9,7 @@ no environment flag or argument to disable it.
 Usage (bottom of each ``vrtda`` module)::
 
     from vrtda.beartype_guard import beartype_module
-    beartype_module(sys.modules[__name__])
+    beartype_module(__name__)
 
 Because each module wraps itself right after its definitions, any other module
 that imports one of its functions receives the already-wrapped (checked) version.
@@ -39,9 +39,11 @@ def beartype_function(func: types.FunctionType) -> types.FunctionType:
 def beartype_module(module: Any) -> None:
     """Wrap all functions and non-dunder methods of ``module`` with beartype.
 
-    Idempotent: already-wrapped functions (marked ``__vrtda_beartyped__``) are left
-    alone, so calling this more than once is safe.
+    ``module`` may be a module object or its name (a string). Idempotent:
+    already-wrapped functions (marked ``__vrtda_beartyped__``) are left alone.
     """
+    if isinstance(module, str):
+        module = sys.modules[module]
     for _name, obj in list(vars(module).items()):
         if isinstance(obj, types.FunctionType) and getattr(obj, "__module__", None) == module.__name__:
             setattr(module, _name, beartype_function(obj))

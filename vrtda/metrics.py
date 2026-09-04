@@ -1,14 +1,18 @@
 from __future__ import annotations
 
+from collections.abc import Callable
+
 import numpy as np
 
+from vrtda.beartype_guard import beartype_function
 from vrtda.errors import MetricError
 
-_METRICS = {}
+_METRICS: dict[str, Callable] = {}
 
 
-def register(name: str):
-    def deco(fn):
+def register(name: str) -> Callable[[Callable], Callable]:
+    def deco(fn: Callable) -> Callable:
+        fn = beartype_function(fn)
         _METRICS[name] = fn
         fn.name = name
         return fn
@@ -19,7 +23,7 @@ def names() -> list[str]:
     return sorted(_METRICS)
 
 
-def get(name: str):
+def get(name: str) -> Callable:
     if name not in _METRICS:
         raise MetricError(f"unknown metric {name!r}; available: {names()}")
     return _METRICS[name]
@@ -70,3 +74,8 @@ def normalized_euclidean(a: np.ndarray, b: np.ndarray) -> np.ndarray:
     na[na == 0] = 1.0
     nb[nb == 0] = 1.0
     return _euclidean_block(a / na, b / nb)
+
+
+from vrtda.beartype_guard import beartype_module as _beartype_module
+
+_beartype_module(__name__)

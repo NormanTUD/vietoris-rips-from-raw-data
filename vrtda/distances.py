@@ -46,7 +46,7 @@ def _validate(D: np.ndarray, metric: str) -> None:
     debug.assert_debug(bool(np.all(D >= 0)), "negative distances")
 
 
-def distance_matrix_summary(D: np.ndarray) -> dict:
+def distance_matrix_summary(D: np.ndarray) -> dict[str, int | float]:
     off = D[~np.eye(D.shape[0], dtype=bool)]
     return {
         "n": D.shape[0],
@@ -55,3 +55,8 @@ def distance_matrix_summary(D: np.ndarray) -> dict:
         "mean": float(off.mean()),
         "median": float(np.median(off)),
     }
+
+
+from vrtda.beartype_guard import beartype_module as _beartype_module
+
+_beartype_module(__name__)
