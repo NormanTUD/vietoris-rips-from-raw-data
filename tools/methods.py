@@ -45,6 +45,7 @@ METHODS = {
     "mapper": "1D Mapper graph (lens -> Rips per bin -> betti)",
     "dynamics": "dynamical attractors: convergence, per-language, flow-SVD, attention",
 }
+METHODS_DYNAMIC = ["convergence", "per_language", "flow", "attention"]
 
 
 def _try_plot(fn, *a, **k):
@@ -152,42 +153,29 @@ def cmd_depth(args):
     if args.plot:
         _try_plot("plot_depth_heatmap", H, fracs, Ls, args.plot + ".heatmap.png")
         _try_plot("plot_betti_over_depth", prof, args.plot + ".betti_depth.png")
-        # overlay a long chain's loop on a 2-PCA of that layer's cloud
         if long:
+            from vrtda.reduction import pca
+
             c = sorted(long, key=lambda c: -c.length)[0]
             L = c.layers()[0]
-            from vrtda.reduction import reduce as _red
-
-            xy = _red(lr[L].complex is not None and lr[L].labels and ps2(lr, L), 2)
-            loops = []
-            for tset in c.per_layer_tokens.values():
-                idx = [lr[L].labels.index(t) for t in tset if t in lr[L].labels]
-                if len(idx) >= 2:
-                    loops.append(idx)
-            _try_plot("plot_attractor_overlay", xy, loops[:6], args.plot + ".overlay.png",
-                      title=f"attractor over layers {c.span}")
+            ps = datasets.load_token_cloud(args.data_dir, L)
+            xy = pca(ps.data, 2)
+            idx = [ps.labels.index(t) for t in c.per_layer_tokens[L] if t in ps.labels]
+            _try_plot("plot_attractor_overlay", xy, [idx] if len(idx) >= 2 else [],
+                      args.plot + ".overlay.png", title=f"attractor layers {c.span} @ L{L}")
     return 0
-
-
-def ps2(lr, L):
-    # reconstruct a point matrix placeholder (labels only) for the overlay helper
-    # (the overlay uses a 2D projection; we rebuild via load_token_cloud in cmd)
-    return None
 
 
 def cmd_mapper(args):
     if args.csv:
         ps = PointSet.from_csv(args.csv, value_cols=args.value_cols, index_cols=args.index_cols)
-        if args.lens and args.lens in [c for c in (ps.labels and [])]:
-            phi = None
-        norms, _ = (datasets.load_residual_matrix(args.data_dir, "norms"), None) if not args.csv else (None, None)
-        phi = _lens_from_csv(ps, args.lens)
         name = Path(args.csv).stem
+        phi = np.linalg.norm(ps.data, axis=1)  # default lens: distance from origin
     else:
         L = int(args.layer)
         ps = datasets.load_token_cloud(args.data_dir, L)
         norms, _labels = datasets.load_residual_matrix(args.data_dir, "norms")
-        phi = norms[:, L]
+        phi = norms[:, L]  # residual-norm lens
         name = f"layer_{L:03d}"
     g = mapper_mod.mapper(ps.data, phi, n_bins=args.n_bins, overlap=args.overlap,
                           eps=args.eps, eps_frac=args.eps_frac, max_dim=args.max_dim)
@@ -199,13 +187,6 @@ def cmd_mapper(args):
     if args.plot:
         _try_plot("plot_mapper", g, args.plot + ".mapper.png")
     return 0
-
-
-def _lens_from_csv(ps, lens):
-    # a simple numeric-ish lens from labels or the first coordinate
-    if lens is None:
-        return np.linalg.norm(ps.data, axis=1)
-    return np.linalg.norm(ps.data, axis=1)
 
 
 def cmd_dynamics(args):
@@ -304,8 +285,6 @@ def main() -> int:
         return 0
     return args.fn(args)
 
-
-METHODS_DYNAMIC = ["convergence", "per_language", "flow", "attention"]
 
 if __name__ == "__main__":
     raise SystemExit(main())
