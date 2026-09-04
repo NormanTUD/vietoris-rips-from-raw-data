@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 
 import numpy as np
 
 from vrtda import debug
+from vrtda.complexes import FilteredComplex
 from vrtda.errors import VrtdaError
 
 
@@ -24,7 +26,7 @@ class Interval:
     def length(self) -> float:
         return self.death - self.birth
 
-    def as_tuple(self):
+    def as_tuple(self) -> tuple[int, float, float]:
         return (self.dim, self.birth, self.death)
 
     def alive_at(self, eps: float) -> bool:
@@ -34,8 +36,8 @@ class Interval:
 @dataclass
 class Barcode:
     intervals: list[Interval] = field(default_factory=list)
-    values: np.ndarray = None
-    dims: np.ndarray = None
+    values: np.ndarray | None = None
+    dims: np.ndarray | None = None
 
     def of_dim(self, dim: int) -> list[Interval]:
         return [iv for iv in self.intervals if iv.dim == dim]
@@ -50,7 +52,7 @@ class Barcode:
             out.append(sum(1 for iv in self.of_dim(d) if iv.alive_at(eps)))
         return out
 
-    def betti_function(self, epsilons) -> np.ndarray:
+    def betti_function(self, epsilons: Sequence[float]) -> np.ndarray:
         epsilons = list(epsilons)
         md = self.max_dim()
         arr = np.zeros((len(epsilons), md + 1), dtype=np.int64)
@@ -74,7 +76,7 @@ class Barcode:
         return out
 
 
-def persistent_homology(complex) -> Barcode:
+def persistent_homology(complex: FilteredComplex) -> Barcode:
     n = complex.n_simplices
     cols: list[set[int]] = []
     for j in range(n):
@@ -132,3 +134,8 @@ def persistent_homology(complex) -> Barcode:
         )
     intervals.sort(key=lambda iv: (iv.dim, iv.birth, iv.death))
     return Barcode(intervals=intervals, values=values.copy(), dims=dims.copy())
+
+
+from vrtda.beartype_guard import beartype_module as _beartype_module
+
+_beartype_module(__name__)

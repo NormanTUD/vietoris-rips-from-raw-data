@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
+
 import numpy as np
 
 from vrtda import debug
+from vrtda.complexes import FilteredComplex
 
 
 def gf2_rank(cols: list[int]) -> int:

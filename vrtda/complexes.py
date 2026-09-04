@@ -136,6 +136,8 @@ def _enumerate_cliques(
         for t, v in zip(tri, vals):
             out.append((float(v), dim, tuple(int(x) for x in t)))
 
+    add_batch = beartype_function(add_batch)
+
     if max_dim >= 1:
         ii, jj = np.triu_indices(n, 1)
         m = A[ii, jj]
@@ -199,13 +201,15 @@ def build_rips(
     A = (D <= eps_max + 1e-15).copy()
     np.fill_diagonal(A, False)
 
-    def value_fn(s):
+    def value_fn(s: tuple[int, ...]) -> float:
         idx = list(s)
         v = 0.0
         for a in range(len(idx)):
             for b in range(a + 1, len(idx)):
                 v = max(v, D[idx[a], idx[b]])
         return float(v)
+
+    value_fn = beartype_function(value_fn)
 
     with debug.timing(f"build_rips n={D.shape[0]} eps={eps_max} dim<={max_dim}"):
         simplexes = _enumerate_cliques(A, D, max_dim, max_simplices, value_fn)
@@ -242,7 +246,7 @@ def build_vietoris(
     return _sort_and_build(kept, "vietoris", {"r": r, "max_dim": max_dim})
 
 
-def make_torus_grid_complex(k: int, cells, name: str = "torus_grid") -> FilteredComplex:
+def make_torus_grid_complex(k: int, cells: Sequence[int], name: str = "torus_grid") -> FilteredComplex:
     if k < 2:
         raise FiltrationError("torus_grid requires k >= 2")
     cells = tuple(int(c) for c in cells)
@@ -251,7 +255,7 @@ def make_torus_grid_complex(k: int, cells, name: str = "torus_grid") -> Filtered
     if any(c < 2 for c in cells):
         raise FiltrationError("each cell count must be >= 2")
 
-    def vidx(coord):
+    def vidx(coord: Sequence[int]) -> int:
         idx = 0
         stride = 1
         for a in range(k):
@@ -259,9 +263,10 @@ def make_torus_grid_complex(k: int, cells, name: str = "torus_grid") -> Filtered
             stride *= cells[a]
         return idx
 
-    simp_set: set[tuple] = set()
+    vidx = beartype_function(vidx)
+    simp_set: set[tuple[int, ...]] = set()
 
-    def add_simplex(verts: list[tuple]) -> None:
+    def add_simplex(verts: list[tuple[int, ...]]) -> None:
         if len(verts) < 1:
             return
         if len(verts) == 1:
@@ -273,6 +278,8 @@ def make_torus_grid_complex(k: int, cells, name: str = "torus_grid") -> Filtered
         for r in range(1, len(s) + 1):
             for face in combinations(s, r):
                 simp_set.add(face)
+
+    add_simplex = beartype_function(add_simplex)
 
     from itertools import product as _product
     for o in _product(*[range(c) for c in cells]):
@@ -292,3 +299,8 @@ def make_torus_grid_complex(k: int, cells, name: str = "torus_grid") -> Filtered
         ordered.append((float(d), d, s))
     with debug.timing(f"make_torus_grid_complex k={k} cells={cells}"):
         return _sort_and_build(ordered, "torus_grid", {"k": k, "cells": cells, "name": name})
+
+
+from vrtda.beartype_guard import beartype_module as _beartype_module
+
+_beartype_module(__name__)
