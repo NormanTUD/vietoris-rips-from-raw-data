@@ -83,4 +83,4 @@ def test_empty_at_zero_eps_disconnected():
         (0.0, 0, (0,)), (0.0, 0, (1,)), (5.0, 1, (0, 1)),
     ])
     assert betti_at(C, 0.0) == [2]
-    assert betti_at(C, 5.0) == [1]
+    assert betti_at(C, 5.0) == [1, 0]

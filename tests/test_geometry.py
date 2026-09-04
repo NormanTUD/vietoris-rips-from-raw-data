@@ -15,9 +15,9 @@ def test_two_points():
 
 def test_three_acute():
     # equilateral triangle side 2 -> circumradius 2/sqrt(3)
-    pts = np.array([[1.0, 0.0], [-0.5, np.sqrt(3) / 2], [-0.5, -np.sqrt(3) / 2]])
+    pts = np.array([[0.0, 0.0], [2.0, 0.0], [1.0, np.sqrt(3.0)]])
     r = min_enclosing_ball_radius(pts)
-    assert r == pytest.approx(1.0 / np.sqrt(3.0), rel=1e-6)
+    assert r == pytest.approx(2.0 / np.sqrt(3.0), rel=1e-6)
 
 
 def test_three_obtuse():

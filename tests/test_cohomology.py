@@ -24,7 +24,7 @@ def test_cohomology_match_helper_passes():
     from vrtda.complexes import make_torus_grid_complex
     C = make_torus_grid_complex(2, (3, 3))
     eps = float(C.values.max())
-    assert_homology_cohomology_match(C, eps)  # should not raise
+    assert_homology_cohomology_match(C, [0.0, 1.0, eps])  # should not raise
 
 
 def test_cohomology_at_intermediate_eps():

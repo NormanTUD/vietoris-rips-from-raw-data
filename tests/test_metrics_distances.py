@@ -22,7 +22,7 @@ def test_euclidean_known():
     assert D.shape == (3, 3)
     assert D[0, 1] == pytest.approx(5.0)
     assert D[0, 2] == pytest.approx(1.0)
-    assert D[1, 2] == pytest.approx(np.sqrt(37.0))
+    assert D[1, 2] == pytest.approx(3.0 * np.sqrt(2.0))
     np.testing.assert_allclose(np.diag(D), 0.0)
 
 
@@ -52,12 +52,22 @@ def test_cosine_properties():
     assert D[0, 2] == pytest.approx(1 - 1 / np.sqrt(2))
 
 
-def test_normalized_euclidean_scale_invariant():
+def test_normalized_euclidean_global_scale_invariant():
     rng = np.random.default_rng(2)
     x = rng.normal(size=(15, 6))
-    y = x * np.array([3.0, 7.0, 1.0, 2.0, 5.0, 9.0])[None, :]
+    y = x * 3.7  # global positive scaling preserves directions
     D1 = pairwise_distances(x, "normalized_euclidean")
     D2 = pairwise_distances(y, "normalized_euclidean")
+    np.testing.assert_allclose(D1, D2, atol=1e-9)
+
+
+def test_normalized_euclidean_equals_euclidean_on_unit_points():
+    # for already-unit-norm points the metric reduces to plain euclidean
+    rng = np.random.default_rng(3)
+    x = rng.normal(size=(10, 4))
+    x = x / np.linalg.norm(x, axis=1, keepdims=True)
+    D1 = pairwise_distances(x, "normalized_euclidean")
+    D2 = pairwise_distances(x, "euclidean")
     np.testing.assert_allclose(D1, D2, atol=1e-9)
 
 

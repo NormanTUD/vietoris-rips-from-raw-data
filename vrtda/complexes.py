@@ -210,7 +210,11 @@ def build_vietoris(
 ) -> FilteredComplex:
     if r < 0:
         raise FiltrationError("r must be >= 0")
-    A = (D <= 2.0 * r + 1e-15).copy()
+    # MEB radius <= r  =>  every pairwise distance <= 2*r, so an edge-adjacency
+    # threshold of 2*r + 2*TOL is a guaranteed superset of every kept simplex's
+    # faces. Using 2*TOL (not TOL) keeps the complex closed under faces.
+    TOL = 1e-9 * max(1.0, r)
+    A = (D <= 2.0 * r + 2.0 * TOL).copy()
     np.fill_diagonal(A, False)
 
     cand = _enumerate_cliques(
@@ -222,7 +226,7 @@ def build_vietoris(
             kept.append((0.0, 0, s))
             continue
         rad = G.min_enclosing_ball_radius(X[list(s)])
-        if rad <= r + 1e-12 * max(1.0, r):
+        if rad <= r + TOL:
             kept.append((rad, d, s))
     return _sort_and_build(kept, "vietoris", {"r": r, "max_dim": max_dim})
 
