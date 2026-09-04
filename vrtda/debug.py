@@ -45,7 +45,7 @@ def section(name: str) -> None:
         print(f"\n{bar} {name} {bar}", file=sys.stderr, flush=True)
 
 
-def warn(msg: str, *args) -> None:
+def warn(msg: str, *args: object) -> None:
     if args:
         msg = msg % args
     print(f"[vrtda:warn] {msg}", file=sys.stderr, flush=True)

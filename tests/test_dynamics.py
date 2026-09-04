@@ -1,10 +1,13 @@
+from __future__ import annotations
+
 import numpy as np
 import pytest
 
 from vrtda import dynamics
+from vrtda.beartype_guard import beartype_module
 
 
-def test_convergence_loads():
+def test_convergence_loads() -> None:
     conv = dynamics.convergence()
     assert len(conv.layers) == 65
     assert conv.layers[0] == 0 and conv.layers[-1] == 64
@@ -12,7 +15,7 @@ def test_convergence_loads():
     assert np.all(conv.centroid_norm >= 0)
 
 
-def test_convergence_summary_keys():
+def test_convergence_summary_keys() -> None:
     s = dynamics.convergence_summary(dynamics.convergence())
     for k in ["n_layers", "peak_spread_layer", "final_centroid_norm",
               "final_mean_dist_to_centroid", "converged_layer", "spread_shrink"]:
@@ -22,7 +25,7 @@ def test_convergence_summary_keys():
     assert -1e-9 <= s["spread_shrink"] <= 1.0 + 1e-9
 
 
-def test_per_language_final_token_distance_shape_and_convergence():
+def test_per_language_final_token_distance_shape_and_convergence() -> None:
     layers, mat, prompts = dynamics.per_language_final_token_distance(layers=[0, 16, 64])
     assert mat.shape == (12, 3)
     assert len(prompts) == 12
@@ -32,7 +35,7 @@ def test_per_language_final_token_distance_shape_and_convergence():
     assert mat[:, 2].mean() < 1000.0  # tightly clustered at the output
 
 
-def test_flow_svd_rank1():
+def test_flow_svd_rank1() -> None:
     comp, var, ls = dynamics.flow_svd(layers=list(range(0, 65, 8)))
     assert comp.shape[0] == 5 and comp.shape[1] == 5120
     assert len(var) == 5
@@ -40,9 +43,12 @@ def test_flow_svd_rank1():
     assert var[0] > 0.8  # the attractor centroid moves along ~one direction
 
 
-def test_attention_over_depth():
+def test_attention_over_depth() -> None:
     layers, curve, peak = dynamics.attention_over_depth(metric="to_self")
     assert len(layers) == 64
     assert len(curve) == 64
     assert 0 <= peak < 64
     assert np.all(np.isfinite(curve))
+
+
+beartype_module(__name__)

@@ -1,10 +1,13 @@
+from __future__ import annotations
+
 import numpy as np
 import pytest
 
+from vrtda.beartype_guard import beartype_module
 from vrtda.mapper import mapper, mapper_residual
 
 
-def test_two_disjoint_squares_two_loop_nodes():
+def test_two_disjoint_squares_two_loop_nodes() -> None:
     A = np.array([[0, 0], [1, 0], [1, 1], [0, 1]], float)
     B = A + np.array([100.0, 0.0])
     X = np.vstack([A, B])
@@ -15,7 +18,7 @@ def test_two_disjoint_squares_two_loop_nodes():
     assert g.n_edges == 0  # disjoint -> no overlap
 
 
-def test_overlap_creates_edge_when_connected():
+def test_overlap_creates_edge_when_connected() -> None:
     # one square whose points are spread across the lens -> spans two bins with a
     # connected 2-point overlap
     A = np.array([[0, 0], [1, 0], [1, 1], [0, 1]], float)
@@ -26,7 +29,7 @@ def test_overlap_creates_edge_when_connected():
     assert g.edges[0] == (0, 1, 2)
 
 
-def test_single_blob_single_node():
+def test_single_blob_single_node() -> None:
     rng = np.random.default_rng(0)
     X = rng.normal(size=(30, 2))
     phi = np.arange(30.0)  # a linear lens
@@ -37,8 +40,11 @@ def test_single_blob_single_node():
     assert sum(n.beta0 for n in g.nodes) >= 1
 
 
-def test_mapper_residual_smoke():
+def test_mapper_residual_smoke() -> None:
     g = mapper_residual(layer=16, n_bins=6, eps_frac=2.0)
     assert g.n_nodes == 6
     assert len(g.beta1_profile()) == 6
     assert g.n_edges >= 0
+
+
+beartype_module(__name__)

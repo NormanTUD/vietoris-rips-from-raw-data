@@ -107,7 +107,7 @@ class PointSet:
         return cls(arr, labels=labels, meta=meta, name=name)
 
     @classmethod
-    def concat(cls, sets: list["PointSet"], name="concat") -> "PointSet":
+    def concat(cls, sets: list["PointSet"], name: str = "concat") -> "PointSet":
         assert sets, "need at least one PointSet"
         d = sets[0].dim
         for s in sets[1:]:
