@@ -24,7 +24,8 @@ from typing import Any
 from beartype import beartype
 
 
-def _wrap_once(func: types.FunctionType) -> types.FunctionType:
+def beartype_function(func: types.FunctionType) -> types.FunctionType:
+    """Wrap a single function with beartype (idempotent via the marker below)."""
     if getattr(func, "__vrtda_beartyped__", False):
         return func
     wrapped = beartype(func)

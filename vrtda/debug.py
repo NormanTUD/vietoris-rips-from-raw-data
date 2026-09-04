@@ -32,7 +32,7 @@ def is_debug() -> bool:
     return enabled()
 
 
-def log(msg: str, *args) -> None:
+def log(msg: str, *args: object) -> None:
     if enabled():
         if args:
             msg = msg % args
@@ -51,13 +51,13 @@ def warn(msg: str, *args) -> None:
     print(f"[vrtda:warn] {msg}", file=sys.stderr, flush=True)
 
 
-def dump(label: str, obj) -> None:
+def dump(label: str, obj: object) -> None:
     if enabled():
         print(f"[debug] {label}: {obj!r}", file=sys.stderr, flush=True)
 
 
 @contextmanager
-def timing(label: str):
+def timing(label: str) -> Iterator[None]:
     if not enabled():
         yield
         return
@@ -72,3 +72,8 @@ def timing(label: str):
 def assert_debug(cond: bool, msg: str) -> None:
     if enabled() and not cond:
         raise AssertionError(msg)
+
+
+from vrtda.beartype_guard import beartype_module as _beartype_module
+
+_beartype_module(sys.modules[__name__])
