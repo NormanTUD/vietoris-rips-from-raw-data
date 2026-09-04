@@ -373,8 +373,8 @@ vrtda/                  # the library
    plotting.py           # optional matplotlib plotting (diagrams, heatmaps, overlay, ...)
    errors.py, debug.py   # error hierarchy, opt-in --debug / VR_DEBUG logging
 tools/                  # PEP 723 command-line tools
-   analyze.py  make_torus.py  betti_sweep.py  barcodes.py  project.py
-   attractors.py  plot.py  methods.py  load_smoke.py  run_tests.py
+    analyze.py  make_torus.py  betti_sweep.py  barcodes.py  project.py
+    attractors.py  plot.py  interactive.py  methods.py  load_smoke.py  run_tests.py
 tests/                  # pytest suite (170 tests)
 examples/               # end-to-end example + generated report.md
 docs/                   # MATH.md (formal math + refs), PLAN.md (roadmap)
