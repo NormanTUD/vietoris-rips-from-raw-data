@@ -201,10 +201,10 @@ def build_payload(args: argparse.Namespace) -> dict[str, object]:
     }
 
 
-def parse_layers(spec: str | None) -> list[int]:
+def parse_layers(spec: str | None, data_dir: str | Path | None = None) -> list[int]:
     """Parse a --layers spec: 'start:stop[:step]' (Python range, inclusive stop),
     a comma list ('0,16,32,64'), or an explicit space/comma list of ints. None -> all."""
-    all_l = datasets.list_layers()
+    all_l = datasets.list_layers(data_dir=data_dir)
     if not spec or spec == "all":
         return all_l
     spec = spec.strip()
@@ -229,10 +229,9 @@ def build_layer_trajectory(args: argparse.Namespace) -> dict[str, object]:
     """Layer/trajectory mode: project the token clouds of several layers into one
     shared 3D frame (PCA of a few reference layers) so the tokens can be seen
     MOVING across the surface as the layer index (time) advances."""
-    layers = parse_layers(args.layers)
+    layers = parse_layers(args.layers, data_dir=args.data_dir)
     if not layers:
-        raise SystemExit(f"no layers matched {args.layers!r}; available: {datasets.list_layers()}")
-    all_l = datasets.list_layers()
+        raise SystemExit(f"no layers matched {args.layers!r}; available: {datasets.list_layers(data_dir=args.data_dir)}")
     ref_idx = sorted(set([0, len(layers) // 2, len(layers) - 1]))
     ref_layers = [layers[i] for i in ref_idx]
     ref = [datasets.load_token_cloud(data_dir=args.data_dir, layer=L).data for L in ref_layers]
