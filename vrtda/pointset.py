@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+from collections.abc import Sequence
 from pathlib import Path
 
 import numpy as np
@@ -13,8 +14,8 @@ class PointSet:
     def __init__(
         self,
         data: np.ndarray,
-        labels: list | None = None,
-        meta: dict | None = None,
+        labels: list[str] | None = None,
+        meta: dict[str, object] | None = None,
         name: str = "",
     ) -> None:
         data = np.asarray(data, dtype=np.float64)
@@ -22,15 +23,15 @@ class PointSet:
             raise ShapeError(f"PointSet data must be 2D (N, D), got shape {data.shape}")
         if not np.all(np.isfinite(data)):
             raise DataError("PointSet data contains NaN/Inf; impute or remove first")
-        self.data = data
+        self.data: np.ndarray = data
         n = data.shape[0]
         if labels is None:
             labels = [str(i) for i in range(n)]
         if len(labels) != n:
             raise ShapeError(f"labels length {len(labels)} != N={n}")
-        self.labels = list(labels)
-        self.meta = dict(meta or {})
-        self.name = name
+        self.labels: list[str] = list(labels)
+        self.meta: dict[str, object] = dict(meta or {})
+        self.name: str = name
 
     # ---- properties -------------------------------------------------------
     @property
@@ -47,21 +48,27 @@ class PointSet:
     def __repr__(self) -> str:
         return f"PointSet(name={self.name!r}, N={self.n}, D={self.dim})"
 
-    def __getitem__(self, idx):
+    def __getitem__(self, idx: object) -> np.ndarray:
         return self.data[idx]
 
     # ---- construction -----------------------------------------------------
     @classmethod
-    def from_array(cls, data, labels=None, meta=None, name="") -> "PointSet":
+    def from_array(
+        cls,
+        data: np.ndarray,
+        labels: list[str] | None = None,
+        meta: dict[str, object] | None = None,
+        name: str = "",
+    ) -> "PointSet":
         return cls(data, labels=labels, meta=meta, name=name)
 
     @classmethod
     def from_csv(
         cls,
-        path,
-        value_cols=None,
-        index_cols=None,
-        name=None,
+        path: str | Path,
+        value_cols: list[str] | None = None,
+        index_cols: list[str] | None = None,
+        name: str | None = None,
     ) -> "PointSet":
         path = Path(path)
         if not path.exists():
