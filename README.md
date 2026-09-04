@@ -165,7 +165,37 @@ uv run tools/plot.py --points mydata.csv --value-cols x y --out-dir plots/
 uv run tools/plot.py --points torus2.csv --metric cosine --title "2-torus" --out-dir plots/
 ```
 
-Produces `plots/betti.png`, `plots/barcode.png`, `plots/cloud.png`.
+ Produces `plots/betti.png`, `plots/barcode.png`, `plots/cloud.png`.
+
+### `methods.py` — the selectable attractor-method suite  ⭐
+
+One command to run **any** of the six analysis methods; every parameter is optional.
+`--list` shows what's available.
+
+```bash
+uv run tools/methods.py --list                 # show the methods
+
+# persistence metrics (entropy / landscape / image) for a barcode
+uv run tools/methods.py metrics --a-layer 16 --dim 1 --plot out/metrics
+
+# bottleneck + p-Wasserstein between two barcodes (top-k salient points)
+uv run --with scipy tools/methods.py distance --a-layer 16 --b-layer 32 --top-k 15
+
+# cross-LAYER attractors: profile + (scale x depth) heatmap + loop chains + stable core
+uv run tools/methods.py depth --layers 16 17 18 19 20 --eps-cap-frac 2.0 --top-k 8
+uv run --with matplotlib tools/methods.py depth --layers 16 17 18 --plot out/depth
+
+# 1D Mapper (lens = residual norm by default)
+uv run tools/methods.py mapper --layer 16 --n-bins 6 --plot out/mapper
+
+# dynamical attractors: convergence, per-language, flow-SVD, attention-over-depth
+uv run tools/methods.py dynamics --which convergence per_language flow attention
+```
+
+The `depth` method is the key one for the "attractors live across many layers"
+question: because all 81 tokens share a fixed identity across layers, a loop that
+reappears in consecutive layers (matched by token-set overlap) is an attractor
+persisting in **depth**, reported as a chain with a `(layer_start, layer_end)` span.
 
 ---
 
