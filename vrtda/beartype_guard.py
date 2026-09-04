@@ -21,14 +21,20 @@ import sys
 import types
 from typing import Any
 
-from beartype import beartype
+from beartype import BeartypeConf, beartype
+
+# PEP 484 numeric tower: an ``int`` is accepted wherever a ``float`` (or complex)
+# is expected, matching the way the numeric code in this package is actually called
+# (e.g. ``p=2`` for a ``p: float``). Returns are checked against the same tower,
+# while ``int`` returns stay strict and non-numeric types are always rejected.
+_CONF = BeartypeConf(is_pep484_tower=True)
 
 
 def beartype_function(func: types.FunctionType) -> types.FunctionType:
     """Wrap a single function with beartype (idempotent via the marker below)."""
     if getattr(func, "__vrtda_beartyped__", False):
         return func
-    wrapped = beartype(func)
+    wrapped = beartype(func, conf=_CONF)
     try:
         wrapped.__vrtda_beartyped__ = True
     except (AttributeError, TypeError):  # pragma: no cover - defensive
