@@ -209,6 +209,38 @@ persistence, noise filtered by `--min-persistence`, at most `--max-bars` per dim
 left, and the full birth–death **persistence diagram** on the right. This keeps the figure
 legible even for high-dim clouds that yield hundreds of short-lived dim-0 components.
 
+### `interactive.py` — a live, draggable ε-slider in your browser  ⭐
+
+Generates a **single self-contained `interactive.html`** (no internet, no build step) you
+open in any browser. Drag the **ε slider** (or press **▶ Play**) and watch the
+Vietoris–Rips complex grow — points → edges → faces — while the Betti numbers
+**β₀ (H₀ components), β₁ (H₁ loops/holes), β₂ (H₂ voids)** update live next to a
+persistence diagram and the Betti curve. **Drag the 3D view to rotate.**
+
+```bash
+# the exact 2-torus T² (target β = [1,2,1]) as a rotatable 3D donut
+uv run tools/interactive.py --out interactive.html
+
+# a circle (β₁ = 1), a blob cloud, or the 2-torus as a point cloud
+uv run tools/interactive.py --shape circle --n 40 --out circle.html
+uv run tools/interactive.py --shape blobs --out blobs.html
+uv run tools/interactive.py --shape product --k 2 --nper 10 --out product.html
+
+# your own data, any dimension:
+uv run tools/interactive.py --points mydata.csv --out my.html
+uv run tools/interactive.py --points mydata.csv --metric cosine --max-dim 2 --out my.html
+```
+
+**How it handles different dimensionalities** (the whole point of "really seeing" the
+filtration, not just data points):
+- **2D / 3D** clouds are drawn directly (3D is rotatable).
+- **Higher-dim (≥4D)** clouds are displayed as a **3D PCA projection** — but the Rips
+  complex and the Betti numbers are still computed in the *original* D-dim space, so the
+  topology readout stays exact; the view just shows where the mass lives.
+- **`torus-grid`** (default) uses the *exact* torus cell complex (not a noisy Rips cloud),
+  so the torus settles cleanly on **β = [1, 2, 1]**: β₀ collapses to 1 as the surface
+  connects, β₁ rises to 2 (the two loops), β₂ settles to 1 (the void).
+
 ### `methods.py` — the selectable attractor-method suite  ⭐
 
 One command to run **any** of the six analysis methods; every parameter is optional.
