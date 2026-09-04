@@ -216,7 +216,6 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
-capital_berlin_multilingual/
 
 # generated outputs (plots / scratch)
 *.png
