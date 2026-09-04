@@ -12,6 +12,13 @@ from vrtda.mapper import MapperGraph
 from vrtda.persistence import Interval
 
 
+_DIM_MEANING: dict[int, str] = {0: "components", 1: "loops / holes", 2: "voids / cavities"}
+
+
+def _dim_label(dim: int) -> str:
+    return f"$H_{dim}$ · {_DIM_MEANING.get(dim, 'higher')}"
+
+
 def _mpl() -> Any:
     try:
         import matplotlib
@@ -130,11 +137,11 @@ def plot_persistence_summary(
             color = "tab:red" if not np.isfinite(iv.death) else "tab:blue"
             ax_bar.hlines(y, iv.birth, cdeath(iv), color=color, lw=1.6)
             y += 1
-        ticks.append((y0 + len(g) / 2 - 0.5, f"$H_{dim}$  ({len(g)})"))
+        ticks.append((y0 + len(g) / 2 - 0.5, f"{_dim_label(dim)}  ({len(g)})"))
     ax_bar.set_yticks([t for t, _ in ticks])
     ax_bar.set_yticklabels([lab for _, lab in ticks])
     ax_bar.set_xlim(0, eps_max)
-    ax_bar.set_xlabel("epsilon")
+    ax_bar.set_xlabel("ε  (filtration value)")
     ax_bar.set_title("barcode (top by persistence)")
     ax_bar.grid(axis="x", alpha=0.25)
 
@@ -144,7 +151,7 @@ def plot_persistence_summary(
         g = [iv for iv in ivs if iv.dim == dim]
         xs = [iv.birth for iv in g]
         ys = [cdeath(iv) for iv in g]
-        ax_diag.scatter(xs, ys, s=16, color=cmap(k / 10.0), label=f"$H_{dim}$", edgecolors="k", linewidths=0.3)
+        ax_diag.scatter(xs, ys, s=16, color=cmap(k / 10.0), label=_dim_label(dim), edgecolors="k", linewidths=0.3)
     ax_diag.plot([0, eps_max], [0, eps_max], "k--", lw=0.8, alpha=0.5)
     ax_diag.set_xlim(0, eps_max)
     ax_diag.set_ylim(0, eps_max)
