@@ -1,15 +1,15 @@
 # /// script
 # requires-python = ">=3.10"
-# dependencies = ["numpy>=1.26", "beartype>=0.18"]
+# dependencies = ["numpy>=1.26", "beartype>=0.18", "rich>=13"]
 # ///
 """Generate a ground-truth point cloud CSV for TDA validation.
 
 Supports n-tori (k = 2, 3, 4, 5, ...) via `--kind product --k K` (a grid of
 points on T^k embedded in R^{2k}), a 1-torus (`circle`), a 3-D bagel (`donut`),
-and a random S^k point cloud (`sphere`). With `--verify` the ground-truth
-topology (Betti numbers) is checked against the exact cell complex for that
-shape, and -- for the low-dimensional cases where a Vietoris-Rips complex on the
-actual cloud recovers it cleanly -- against the cloud itself.
+and a random S^k point cloud (`sphere`). `--verify` checks the ground-truth
+topology (Betti numbers) against the exact cell complex, and -- for the low-dim
+cases where a Vietoris-Rips complex on the cloud recovers it cleanly -- against
+the cloud itself.
 """
 import argparse
 import sys
@@ -17,11 +17,16 @@ from math import comb
 from pathlib import Path
 
 ROOT = str(Path(__file__).resolve().parents[1])
-if ROOT not in sys.path:
-    sys.path.insert(0, ROOT)
+TOOLS = str(Path(__file__).resolve().parent)
+for _p in (ROOT, TOOLS):
+    if _p not in sys.path:
+        sys.path.insert(0, _p)
 
 import numpy as np
 
+from rich.console import Console
+
+import _rich_ui
 from vrtda import PointSet, generators as G
 from vrtda import pairwise_distances, build_rips, persistent_homology, betti_at
 from vrtda.complexes import make_torus_grid_complex, make_simplicial_sphere
@@ -100,28 +105,29 @@ def _apply_randomizer(data: np.ndarray, args: argparse.Namespace) -> np.ndarray:
     return data + rng.normal(0.0, std, data.shape)
 
 
-def verify(kind: str, k: int, cloud: np.ndarray, randomizer: float = 0.0) -> None:
+def verify(kind: str, k: int, cloud: np.ndarray, randomizer: float = 0.0,
+           console: Console | None = None) -> None:
+    c = console or Console()
     expected, label = _expected_betti(kind, k)
-    print(f"verify: {label} expected beta = {expected}")
-    exact = _exact_betti(kind, k)
-    print(f"  exact complex beta = {exact}")
+    rows: list[tuple[str, str]] = [("expected", _rich_ui.fmt_betti(expected))]
+    with _rich_ui.timed(c, "Building exact complex + homology"):
+        exact = _exact_betti(kind, k)
+    rows.append(("exact complex", _rich_ui.fmt_betti(exact) + ("  [green]✓[/green]" if exact == expected else "  [red]✗[/red]")))
     assert exact == expected, f"exact complex beta {exact} != expected {expected}"
     if randomizer > 0.0:
-        print("  (rips-on-cloud skipped: the cloud is jittered via --randomizer, so clean recovery is not guaranteed)")
-        print(f"  OK: {label} topology verified (exact complex)")
-        return
-    # Rips on the actual (clean) cloud is complete and clean only for 1-D and 2-D shapes.
-    if kind == "circle":
+        rows.append(("rips-on-cloud", "(skipped: --randomizer jitter)"))
+    elif kind == "circle":
         rb = _rips_betti(cloud, max_dim=2)
-        print(f"  rips-on-cloud beta = {rb}")
+        rows.append(("rips-on-cloud", _rich_ui.fmt_betti(rb)))
         assert (list(rb) + [0])[:2] == [1, 1], f"rips beta {rb} != [1,1]"
     elif kind == "product" and k <= 2:
         rb = _rips_betti(cloud, max_dim=k + 1)
-        print(f"  rips-on-cloud beta = {rb}")
+        rows.append(("rips-on-cloud", _rich_ui.fmt_betti(rb)))
         assert (list(rb) + [0, 0])[: len(expected)] == expected, f"rips beta {rb} != {expected}"
     else:
-        print("  (rips-on-cloud not checked: the Rips complex hits the combinatorial wall for k>=3 / donut / sphere)")
-    print(f"  OK: {label} topology verified")
+        rows.append(("rips-on-cloud", "(not checked: combinatorial wall)"))
+    _rich_ui.result_table(f"Verify {label}", rows, c)
+    c.print(f"[bold green]OK:[/bold green] {label} topology verified")
 
 
 def main() -> int:
@@ -141,18 +147,28 @@ def main() -> int:
     p.add_argument("--out", required=True, help="output CSV path")
     args = p.parse_args()
 
+    console = Console()
+    _rich_ui.params_table(p, args, console)
+
     if not (0.0 <= args.randomizer <= 1.0):
         raise SystemExit("--randomizer must be in [0, 1]")
 
     data = _apply_randomizer(build(args), args)
     ps = PointSet(data, name=args.kind)
     ps.to_csv(args.out)
-    print(f"wrote {args.out}: n={ps.n} dim={ps.dim}")
+
+    expected, label = _expected_betti(args.kind, args.k)
+    _rich_ui.result_table(f"Ground truth: {label}", [
+        ("output", args.out),
+        ("points", str(ps.n)),
+        ("ambient dim", str(ps.dim)),
+        ("expected β", _rich_ui.fmt_betti(expected)),
+    ], console)
 
     if args.verify:
         if args.kind == "product" and args.k >= 5:
-            print("note: verifying k>=5 exact torus homology can take ~40s")
-        verify(args.kind, args.k, data, args.randomizer)
+            console.print("[yellow]note:[/yellow] verifying k>=5 exact torus homology can take ~40s")
+        verify(args.kind, args.k, data, args.randomizer, console)
     return 0
 
 
