@@ -333,6 +333,224 @@ def _detect_torus_grid(X: np.ndarray, max_count: int = 512) -> tuple[int, int, f
     return int(nu), int(nv), float(R), float(r)
 
 
+# ---- robust torus detection + fitted T^2 reconstruction -------------------
+# A torus point cloud does NOT have to be a perfectly regular grid to be shown
+# as a clean (closed) torus: we detect the torus SHAPE (ring R, tube r) and the
+# grid size (nu, nv) from the point count, then rebuild the exact T^2 cell
+# complex ON TOP OF THE ACTUAL POINTS (arranged by their major/tube angles).
+# At the top of the slider the complex is a closed T^2 -> beta = [1, 2, 1],
+# i.e. everything is connected and no holes remain -- the maximum the slider can
+# reach. Vietoris-Rips on a dense bagel can NEVER do this (it over-fills; see the
+# IMPORTANT block at the top of this file); the fitted T^2 can, and it uses the
+# user's real points. EVERY step fails loudly (a VrtdaError carrying the full
+# state and the reason) instead of silently showing a wrong torus.
+
+
+def _torus_error(why: str, **state: object) -> VrtdaError:
+    """Build a VrtdaError that says WHY a torus-reconstruction step failed and dumps the
+    full relevant state, so a misstep at ANY calculation is loud, not silent."""
+    lines = [f"[torus reconstruction] {why}"]
+    for k in sorted(state):
+        lines.append(f"    {k}: {state[k]}")
+    return VrtdaError("\n".join(lines))
+
+
+def _covers_circle(angles: np.ndarray, max_gap_frac: float = 0.5) -> bool:
+    """True iff `angles` wrap around nearly the whole circle (the largest gap -- including
+    the wrap-around gap -- is < max_gap_frac * 2*pi). A full torus ring/tube must."""
+    s = np.sort(angles % (2.0 * np.pi))
+    if s.size < 2:
+        return False
+    gaps = np.diff(s)
+    wrap_gap = float(s[0] + 2.0 * np.pi - s[-1])
+    largest = float(max(float(gaps.max()), wrap_gap))
+    return largest < max_gap_frac * (2.0 * np.pi)
+
+
+def _all_factors(n: int) -> list[tuple[int, int]]:
+    """All (a, b) with a*b = n and 2 <= a <= b. Empty if n is prime or < 4."""
+    from math import isqrt
+    return [(a, n // a) for a in range(2, isqrt(n) + 1) if n % a == 0]
+
+
+def _rank_assign(u: np.ndarray, v: np.ndarray, nu: int, nv: int) -> np.ndarray:
+    """Assign the n = nu*nv points to the T^2 grid's vertices by (u, v) rank: the i-th
+    major-angle group (u-sorted, nu consecutive groups of nv) becomes ring i, and within a
+    ring the v-sort gives the tube position j. Vertex k = i + j*nu gets the assigned point.
+    Requires n % nu == 0 (true for an exact factorization)."""
+    n = len(u)
+    per = n // nu
+    order_u = np.argsort(u, kind="stable")
+    assign = np.empty(n, dtype=np.int64)
+    for i in range(nu):
+        ring = order_u[i * per:(i + 1) * per]
+        for j, pidx in enumerate(ring[np.argsort(v[ring], kind="stable")]):
+            assign[i + j * nu] = pidx
+    return assign
+
+
+def _grid_edge_median(X: np.ndarray, assign: np.ndarray, nu: int, nv: int) -> float:
+    """Median Euclidean length of the 2 forward grid-neighbour edges per vertex (the full
+    grid has 2n such edges). A factorization that matches the cloud's real ring/tube
+    structure keeps these short; a wrong one strings far-apart points together."""
+    pts = X[assign]
+    n = pts.shape[0]
+    lens = np.empty(2 * n, dtype=np.float64)
+    for k in range(n):
+        i = k % nu
+        j = k // nu
+        n_major = ((i + 1) % nu) + j * nu
+        n_tube = i + ((j + 1) % nv) * nu
+        lens[2 * k] = np.linalg.norm(pts[k] - pts[n_major])
+        lens[2 * k + 1] = np.linalg.norm(pts[k] - pts[n_tube])
+    return float(np.median(lens))
+
+
+def _torus_fit(X: np.ndarray, max_count: int = 512) -> tuple[int, int, float, float] | None:
+    """Robustly decide whether X is a (possibly IRREGULAR) sampling of a torus surface and
+    return the fitted grid + radii (nu, nv, R, r), or None. A cloud is accepted as a torus
+    iff it
+      (a) is a bagel: rho = sqrt(x^2+y^2) spans [R-r, R+r] with a real hole, 0 < r < R;
+      (b) is NOT a sphere/blob: a torus surface keeps r/R < 0.70 (measured 0.35-0.46 even
+          for fat/heritage/noisy tori; spheres/blobs measure 0.93-0.99);
+      (c) wraps around BOTH the ring and the tube (full 2pi circles, no more than a
+          half-circle gap);
+      (d) is a thin 2D surface: median tube-distance residual < 0.35 (true tori measure
+          ~0, noisy ones ~0.24; filled volumes / blobs fail this AND (b)).
+    For a clean grid the exact (nu, nv) is recovered; otherwise the 2-factor (nu, nv) of n
+    whose grid-neighbour edges are shortest (the fit matching the real ring structure) is
+    chosen. Every check is a hard rejection, so a non-torus cloud returns None."""
+    n = X.shape[0]
+    if n < 16 or X.shape[1] < 3 or not np.isfinite(X).all():
+        return None
+    rho = np.hypot(X[:, 0], X[:, 1])
+    R = float(0.5 * (float(rho.max()) + float(rho.min())))
+    r = float(0.5 * (float(rho.max()) - float(rho.min())))
+    if not (1e-9 < r and r < 0.70 * R):   # no real hole, or sphere/blob-like fatness
+        return None
+    u = np.arctan2(X[:, 1], X[:, 0])
+    v = np.arctan2(X[:, 2], rho - R)
+    if not (_covers_circle(u) and _covers_circle(v)):
+        return None                       # must wrap around the ring AND the tube
+    tube_dist = np.hypot(X[:, 2], rho - R)
+    resid = np.abs(tube_dist - r) / max(r, 1e-12)
+    if float(np.median(resid)) > 0.35 or float(np.percentile(resid, 90)) > 0.60:
+        return None                       # not a thin torus surface (blob/filled volume)
+    nu = _even_grid_count(u, max_count)
+    nv = _even_grid_count(v, max_count)
+    if nu is not None and nv is not None and nu * nv == n:
+        return int(nu), int(nv), R, r     # clean regular grid -> exact counts
+    facs = _all_factors(n)
+    if not facs:
+        return None                       # no 2-factor grid -> cannot rebuild a T^2
+    best: tuple[int, int] | None = None
+    best_med = float("inf")
+    for fa, fb in facs:
+        med = _grid_edge_median(X, _rank_assign(u, v, fa, fb), fa, fb)
+        if med < best_med:
+            best_med = med
+            best = (fa, fb)
+    if best is None:
+        return None
+    return int(best[0]), int(best[1]), R, r   # irregular sampling -> best-fit (nu, nv)
+
+
+def _assign_torus_grid(X: np.ndarray, nu: int, nv: int, R: float, r: float) -> np.ndarray:
+    """Assign the n = nu*nv points to the T^2 grid's vertices so that complex vertex
+    k = i + j*nu (i = major ring, j = tube position) sits at the point with the i-th
+    major-angle rank and, within its ring, the j-th tube-angle rank (the EXACT ranking
+    that _torus_fit scored). Returns `assign` where assign[k] is the input row shown at
+    complex vertex k. Verifies (a) the grid fits the point count and (b) the assignment
+    is a bijection over all n points -- otherwise the T^2 would silently show a wrong
+    torus, so this fails loudly."""
+    n = X.shape[0]
+    if nu * nv != n:
+        raise _torus_error("grid does not fit the point count",
+                           nu=nu, nv=nv, n=n, nu_nv=nu * nv, r=r, R=R)
+    rho = np.hypot(X[:, 0], X[:, 1])
+    u = np.arctan2(X[:, 1], X[:, 0])
+    v = np.arctan2(X[:, 2], rho - R)
+    if n % nu != 0 or n // nu != nv:
+        raise _torus_error("point count not divisible by the ring count",
+                           n=n, nu=nu, nv=nv, per=n // nu)
+    assign = _rank_assign(u, v, nu, nv)
+    used = set(int(x) for x in assign)
+    if len(used) != n or min(used) != 0 or max(used) != n - 1:
+        raise _torus_error("grid assignment is not a bijection over the points",
+                           n=n, nu=nu, nv=nv, n_used=len(used),
+                           min_used=(min(used) if used else None),
+                           max_used=(max(used) if used else None))
+    return assign
+
+
+def _fit_torus2(X: np.ndarray, nu: int, nv: int, R: float, r: float,
+                kind: str, label: str) -> tuple[FilteredComplex, np.ndarray, str, list[int], int]:
+    """Rebuild the EXACT T^2 cell complex fitted onto the ACTUAL point cloud X (which
+    need not be a regular grid), with a GEOMETRIC filtration:
+        vertex value 0; edge value = Euclidean distance between its two real points;
+        face value = max of its three edge values.
+    At the top of the slider every edge and face is present, so the complex is a closed
+    T^2 -- beta exactly [1, 2, 1], "everything connected, no holes" -- the maximum the
+    slider can reach. The points shown are the user's REAL points (in grid order), so the
+    3D view is their own bagel, fully filled. Guardrails below fail loudly on any
+    misstep (non-finite/zero edge, broken filtration, beta != [1, 2, 1] at max)."""
+    assign = _assign_torus_grid(X, nu, nv, R, r)
+    pts = X[assign]
+    C0 = make_torus_grid_complex(2, (nu, nv))
+    simps = list(C0.simplexes)
+
+    _edge_val: dict[tuple[int, int], float] = {}
+
+    def _edge(a: int, b: int) -> float:
+        key = (a, b) if a < b else (b, a)
+        if key in _edge_val:
+            return _edge_val[key]
+        d = float(np.linalg.norm(pts[a] - pts[b]))
+        if not np.isfinite(d):
+            raise _torus_error("non-finite edge distance",
+                               a=a, b=b, d=d, nu=nu, nv=nv)
+        if d <= 0.0:
+            raise _torus_error("zero edge distance (coincident grid-neighbours)",
+                               a=a, b=b, nu=nu, nv=nv, pt_a=pts[a].tolist(), pt_b=pts[b].tolist())
+        _edge_val[key] = d
+        return d
+
+    vals: list[float] = []
+    for s in simps:
+        d = len(s) - 1
+        if d == 0:
+            vals.append(0.0)
+        elif d == 1:
+            vals.append(_edge(s[0], s[1]))
+        else:
+            vals.append(max(_edge(s[0], s[1]), _edge(s[0], s[2]), _edge(s[1], s[2])))
+    # Monotonicity guard: every face must be born at or after its edges (face value is
+    # the max of its edge values by construction; verify that the model agrees).
+    for s, v in zip(simps, vals):
+        if len(s) == 3:
+            a, b, c = s
+            mx = max(_edge(a, b), _edge(a, c), _edge(b, c))
+            if float(v) + 1e-12 < mx:
+                raise _torus_error("face born before an edge (broken filtration)",
+                                   nu=nu, nv=nv, face=s,
+                                   face_value=float(v), max_edge_value=float(mx))
+    C = FilteredComplex(
+        simps, np.array(vals, dtype=np.float64),
+        np.array([len(s) - 1 for s in simps], dtype=np.int64),
+        kind, {"nu": nu, "nv": nv, "R": R, "r": r, "fitted": True},
+    )
+    # SAFEGUARD (runtime, reliability): at the top of the slider the fitted T^2 MUST
+    # read exactly [1, 2, 1] -- a closed torus with no holes. If it ever does not, fail
+    # loudly with the full state instead of silently showing a wrong topology.
+    got = persistent_homology(C).betti_at(float(C.values.max()))[:3]
+    if got != [1, 2, 1]:
+        raise _torus_error("fitted T^2 did not close up (beta != [1, 2, 1] at max eps)",
+                           nu=nu, nv=nv, R=R, r=r, got=got,
+                           n_points=X.shape[0], n_simplices=C.n_simplices,
+                           value_max=float(C.values.max()))
+    return C, pts, label, [1, 2, 1], int(C.max_dim())
+
+
 def build_source(args: argparse.Namespace) -> tuple[FilteredComplex, np.ndarray, str, list[int] | None, int]:
     """Return (complex, display_points_3d, projection_label, target_betti_or_None, report_dim).
 
@@ -345,26 +563,29 @@ def build_source(args: argparse.Namespace) -> tuple[FilteredComplex, np.ndarray,
     """
     if args.points is not None:
         # The point-cloud path. Two sub-cases:
-        #  (1) The cloud is a regular grid on a torus surface (a donut_grid, e.g. from
-        #      `make_torus --kind donut --grid`). We RECONSTRUCT THE EXACT T^2 CELL
-        #      COMPLEX from it -> a clean torus (beta=[1,2,1]). This is the reliable
-        #      answer to "load my bagel, show me a torus". Rips on such a grid over-fills
-        #      and never reads beta_1=2 (see the IMPORTANT block above), so the exact
-        #      complex is what actually makes it a torus.
+        #  (1) The cloud is a torus SURFACE (a regular grid OR an irregular sampling, e.g.
+        #      `make_torus --kind donut --grid`). We REBUILD THE EXACT T^2 CELL COMPLEX on
+        #      the actual points (_fit_torus2) -> a closed torus, beta=[1,2,1], no holes at
+        #      the max epsilon -- the reliable answer to "load my bagel, show me a torus".
+        #      Vietoris-Rips on a dense bagel over-fills and never closes up (see the
+        #      IMPORTANT block above), so this fitted complex is what actually makes it a
+        #      torus. --no-exact-torus forces the honest Rips instead.
         #  (2) Any other cloud: plain Vietoris-Rips over the full Dmax range.
         X = PointSet.from_csv(args.points, value_cols=args.value_cols, index_cols=args.index_cols).data
         console = Console()
         if not getattr(args, "no_exact_torus", False):
-            grid = _detect_torus_grid(X)
-            if grid is not None:
-                nu, nv, R, r = grid
-                console.print(f"[cyan]NOTE: detected a {nu}x{nv} torus grid in {args.points}; "
-                              f"using the EXACT T^2 cell complex (a clean torus, beta=[1,2,1]) "
-                              f"instead of Rips (which over-fills a dense bagel). "
-                              f"Use --no-exact-torus to force Rips.[/cyan]")
-                C, pts, _label, target, rd = _exact_torus2(nu, nv, "donut",
-                                                           "torus grid (exact T^2 reconstructed from your CSV)", R, r)
-                return C, pts, "exact T^2 (reconstructed)", target, rd
+            fit = _torus_fit(X)
+            if fit is not None:
+                nu, nv, R, r = fit
+                console.print(f"[cyan]NOTE: detected a torus surface in {args.points} "
+                              f"({nu}x{nv} grid, R={R:.3f}, r={r:.3f}); rebuilding the exact "
+                              f"T^2 cell complex ON your points (a closed torus, beta=[1,2,1], "
+                              f"no holes at the max epsilon) instead of the Vietoris-Rips "
+                              f"complex that over-fills a dense bagel. Use --no-exact-torus "
+                              f"to force Rips.[/cyan]")
+                C, pts, _label, target, rd = _fit_torus2(X, nu, nv, R, r, "donut",
+                                                         "torus (exact T^2 fitted to your points)")
+                return C, pts, "exact T^2 (fitted to points)", target, rd
 
         # (2) Arbitrary point cloud via Rips.
         D = pairwise_distances(X, args.metric)
