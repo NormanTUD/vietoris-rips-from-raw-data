@@ -111,6 +111,32 @@ def _apply_randomizer(data: np.ndarray, args: argparse.Namespace) -> np.ndarray:
     return data + rng.normal(0.0, std, data.shape)
 
 
+# Donut clouds denser than this trip the generation-time warning. A 12x12 grid is the
+# largest bagel whose Rips complex stays feasible; beyond it the 2-skeleton over-fills
+# (wrong beta_1, huge beta_2) and the slider's eps cap falls below the outer surface's
+# formation scale (incomplete 3D view). See the IMPORTANT block in tools/interactive.py.
+_DENSE_DONUT_POINTS: int = 144
+
+
+def _warn_dense_donut(args: argparse.Namespace, n_points: int, console: Console) -> None:
+    """SAFEGUARD (generation time): a donut POINT CLOUD is topologically a torus, but
+    viewing it via Vietoris-Rips later (e.g. `interactive.py --points out.csv`) breaks
+    on a DENSE grid -- beta_1 stays stuck at the grid's loop count, beta_2 explodes,
+    and the 3D view is incomplete (the eps cap is below the outer surface's formation
+    scale). Warn HERE, at the source, and hand the user the reliable command: the exact
+    T^2 cell complex (`--shape donut`), which reads [1,2,1] instantly and fully."""
+    if args.kind != "donut" or n_points <= _DENSE_DONUT_POINTS:
+        return
+    out_html = Path(args.out).with_suffix(".html").name
+    console.print(
+        f"[yellow][bold]NOTE — dense donut ({n_points} pts).[/bold] If you load this CSV "
+        f"via Rips ([bold]interactive.py --points {args.out}[/bold]), it over-fills: beta_1 "
+        f"stays at the grid's loop count, beta_2 explodes, and the 3D view is incomplete. "
+        f"To SEE a clean torus, use the exact cell complex instead:\n"
+        f"   [bold]uv run tools/interactive.py --shape donut --nper {args.nper} --out {out_html}[/bold][/yellow]"
+    )
+
+
 def verify(kind: str, k: int, cloud: np.ndarray, randomizer: float = 0.0,
            console: Console | None = None) -> None:
     c = console or Console()
@@ -162,6 +188,7 @@ def main() -> int:
     data = _apply_randomizer(build(args), args)
     ps = PointSet(data, name=args.kind)
     ps.to_csv(args.out)
+    _warn_dense_donut(args, ps.n, console)
 
     expected, label = _expected_betti(args.kind, args.k)
     _rich_ui.result_table(f"Ground truth: {label}", [
