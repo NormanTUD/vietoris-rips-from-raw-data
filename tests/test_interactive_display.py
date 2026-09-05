@@ -138,6 +138,48 @@ def test_product_torus3_displays_3d_and_low_dims_exact() -> None:
     assert betti_at(C, float(C.values.max()))[:3] == [1, 3, 3]
 
 
+# --------------------------------------------------------------------------- #
+# The epsilon slider must reach a fully-connected complex (the "only points /
+# beta_0=24" bug: the old slider stopped at frac*nn, far short of connectivity)
+# --------------------------------------------------------------------------- #
+def test_slider_reaches_full_connectivity() -> None:
+    C, *_ = interactive.build_source(_args("donut"))  # donut_grid(16,16), a coarse 2D cloud
+    b = betti_at(C, float(C.values.max()))
+    assert b[0] == 1, f"complex not fully connected at eps_max: beta_0={b[0]}"
+    # and the slider bound is at least the connectivity threshold
+    from vrtda import pairwise_distances
+    X = G.donut_grid(16, 16)
+    D = pairwise_distances(X)
+    assert float(C.values.max()) >= interactive._connectivity_threshold(D)
+
+
+def test_connectivity_threshold_matches_components() -> None:
+    from collections import deque
+    X = G.donut_grid(12, 16)
+    D = pairwise_distances(X)
+    T = interactive._connectivity_threshold(D)
+    n = X.shape[0]
+
+    def n_components(eps: float) -> int:
+        adj = (D <= eps).astype(bool)
+        seen = np.zeros(n, dtype=bool)
+        comps = 0
+        for s in range(n):
+            if seen[s]:
+                continue
+            comps += 1
+            q = deque([s]); seen[s] = True
+            while q:
+                u = q.popleft()
+                for v in np.where(adj[u])[0]:
+                    if not seen[v]:
+                        seen[v] = True; q.append(int(v))
+        return comps
+
+    assert n_components(T * 1.0001) == 1
+    assert n_components(T * 0.5) > 1
+
+
 def test_higher_tori_exact_topology() -> None:
     assert betti_at(make_torus_grid_complex(3, (4, 4, 4)), float(make_torus_grid_complex(3, (4, 4, 4)).values.max())) == [1, 3, 3, 1]
     C4 = make_torus_grid_complex(4, (3, 3, 3, 3))

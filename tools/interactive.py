@@ -169,7 +169,7 @@ def build_source(args: argparse.Namespace) -> tuple[FilteredComplex, np.ndarray,
         # beta_0..beta_2; raise --max-dim for genuinely higher-dimensional shapes.
         X = PointSet.from_csv(args.points, value_cols=args.value_cols, index_cols=args.index_cols).data
         D = pairwise_distances(X, args.metric)
-        eps_max = _eps_max(D, args.frac, args.connect_margin)
+        eps_max = _eps_max(D, args.frac, getattr(args, "connect_margin", 1.2))
         max_dim = max(3, args.max_dim)
         C = _build_rips_safe(X, D, eps_max, max_dim)
         pts, proj = _to3d(X, "rips")
@@ -219,7 +219,7 @@ def build_source(args: argparse.Namespace) -> tuple[FilteredComplex, np.ndarray,
         raise SystemExit(f"unknown shape {args.shape!r}")
 
     D = pairwise_distances(X, args.metric)
-    eps_max = _eps_max(D, args.frac, args.connect_margin)
+    eps_max = _eps_max(D, args.frac, getattr(args, "connect_margin", 1.2))
     # Cap at 3-simplices: this is a fast beta_0..beta_2 visualizer, and (k+1)-simplices
     # are combinatorially infeasible for k>=3 (5-cliques explode). For k>=3 the low
     # dimensions beta_0..beta_2 are still exact under Rips; the top class needs the
