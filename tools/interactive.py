@@ -53,6 +53,7 @@ import numpy as np
 
 from vrtda import PointSet, pairwise_distances
 from vrtda.complexes import FilteredComplex, build_rips, make_torus_grid_complex
+from vrtda.errors import TooLargeError
 from vrtda.persistence import persistent_homology
 from vrtda import datasets, generators as G
 from vrtda.beartype_guard import beartype_module
