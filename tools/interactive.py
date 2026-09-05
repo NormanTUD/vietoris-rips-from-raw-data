@@ -1378,10 +1378,11 @@ def build_layer_trajectory(args: argparse.Namespace) -> dict[str, object]:
     except Exception:
         ptexts = [str(order[g]) for g in range(len(order))]
 
-    # ATTRACTOR DETECTION (per sampled layer): each layer is one time step of the system,
-    # so a Betti fingerprint per layer + the layer-to-layer changes are read against the
-    # dynamics catalogue (fixed points / limit cycles / tori / Lorenz-type / basin
-    # networks / bifurcation signatures). Hypotheses only -- see the W-caveats below.
+    # STRUCTURE + ATTRACTOR DETECTION (per sampled layer): each layer is one time step of
+    # the system, so a Betti fingerprint per layer is read against BOTH the topology
+    # catalogue (what homotopy type the token cloud looks like) and the dynamics catalogue
+    # (fixed points / limit cycles / tori / Lorenz-type / basin networks / bifurcation
+    # signatures). Hypotheses only -- see the W-caveats below.
     try:
         strided = layers[::max(1, len(layers) // 12)]
         dyn_rows: dict[int, list[int]] = {}
@@ -1389,6 +1390,11 @@ def build_layer_trajectory(args: argparse.Namespace) -> dict[str, object]:
             i = layers.index(L)
             dyn_rows[int(L)] = _cloud_dynamics_fingerprint(traj[i])
         all_L: list[int] = list(dyn_rows.keys())
+        topo_rows: dict[int, list[int]] = dict(dyn_rows)
+        topo_messages: dict[int, str] = {
+            int(L): _topology_name(r) for L, r in dyn_rows.items()}
+        topo_closest: dict[int, list[dict[str, object]]] = {
+            int(L): _closest_topologies(r) for L, r in dyn_rows.items()}
         dyn_messages: dict[int, str] = {
             int(L): _dynamics_name(r) for L, r in dyn_rows.items()}
         dyn_closest: dict[int, list[dict[str, object]]] = {
@@ -1401,8 +1407,10 @@ def build_layer_trajectory(args: argparse.Namespace) -> dict[str, object]:
         union = np.vstack([traj[layers.index(L)][:: max(1, ntok // 30)] for L in strided])
         global_betti = _cloud_dynamics_fingerprint(union, sub=120)
         dyn_global = _dynamics_name(global_betti)
+        topo_global = _topology_name(global_betti)
     except Exception:
         dyn_messages, dyn_closest, dyn_transitions, dyn_global = {}, {}, {}, ""
+        topo_messages, topo_closest, topo_rows, topo_global = {}, {}, {}, ""
 
     title = args.title or "Token trajectories across layers"
     sub = (f"layers {layers[0]}…{layers[-1]} ({len(layers)} steps)  ·  {ntok} tokens in a shared "
@@ -1424,6 +1432,10 @@ def build_layer_trajectory(args: argparse.Namespace) -> dict[str, object]:
         "dyn_closest": dyn_closest,
         "dyn_transitions": dyn_transitions,
         "dyn_global": dyn_global,
+        "topo_rows": {int(L): [int(v) for v in r] for L, r in topo_rows.items()},
+        "topo_messages": topo_messages,
+        "topo_closest": topo_closest,
+        "topo_global": topo_global,
     }
 
 
@@ -2016,13 +2028,17 @@ function updateCards(){
     const badge = document.getElementById("badge");
     const dynBadge = document.getElementById("dynbadge");
     const L = DATA.layers[li];
+    const tm = (DATA.topo_messages && DATA.topo_messages[L]) || "";
     const msg = (DATA.dyn_messages && DATA.dyn_messages[L]) || "";
     const tr = (DATA.dyn_transitions && DATA.dyn_transitions[L]) || "";
-    if (badge) badge.textContent = msg ? msg.split(":").pop().split("(")[0].trim().slice(0, 120) : "";
-    if (badge) badge.title = "Dynamics at layer " + L + ":\n" + msg;
+    if (badge) badge.textContent = tm ? tm.split("(")[0].trim().slice(0, 130) : "";
+    if (badge) badge.title = "Topology at layer " + L + ":\n" + tm +
+      (DATA.topo_global ? "\n\nWhole-trajectory union guess:\n" + DATA.topo_global : "");
     if (dynBadge){
-      dynBadge.textContent = tr ? ("⇥ " + tr.slice(0, 90)) : "";
-      dynBadge.title = "Bifurcation into layer " + L + ":\n" + tr +
+      dynBadge.textContent = (msg ? msg.split("(")[0].trim().slice(0, 70) : "") +
+                             (tr ? " — ⇥ " + tr.slice(0, 60) : "");
+      dynBadge.title = "Dynamics at layer " + L + ":\n" + msg +
+        (tr ? "\nBifurcation into this layer:\n" + tr : "") +
         (DATA.dyn_global ? "\n\nWhole-trajectory attractor-set guess:\n" + DATA.dyn_global : "");
     }
   }
