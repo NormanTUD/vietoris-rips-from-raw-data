@@ -1311,6 +1311,14 @@ def _prominent_intervals(bc: Barcode, eps_max: float, maxdim: int,
                     if gaps[gi] >= 0.35 * lens[0]:
                         fin = fin[:max(gi + 1, 1)]
                 keep = fin + ess
+            elif top_claimable and ess:
+                # certified EXACT complex: the top/essential classes are genuine, so the
+                # scale-gate (meant for Rips over-fill noise) must NOT drop them -- a
+                # closed torus has NO finite H₂ bars at all and its essential H₂ class
+                # is exactly the enclosed top class that makes it read [1,2,1].
+                keep = ess
+            else:
+                keep = []
         out[d] = keep
     return out
 
