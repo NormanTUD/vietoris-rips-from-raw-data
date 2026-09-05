@@ -64,6 +64,61 @@ def _nn(D: np.ndarray) -> float:
     return float(d.min(1).mean())
 
 
+def _connectivity_threshold(D: np.ndarray) -> float:
+    """Smallest epsilon for which the distance graph (edges where D <= eps) is
+    connected, i.e. the max edge weight of a minimum spanning tree. Below this the
+    point cloud splits into several components; at/above it all points belong
+    together (beta_0 = 1). Computed with a union-find over the sorted edges, so it
+    stops as soon as the graph connects (fast, no homology needed)."""
+    n = D.shape[0]
+    if n <= 1:
+        return 0.0
+    i, j = np.triu_indices(n, 1)
+    w = D[i, j]
+    order = np.argsort(w, kind="stable")
+    parent = list(range(n))
+
+    def find(x: int) -> int:
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    comps = n
+    thresh = 0.0
+    for idx in order:
+        a, b = int(i[idx]), int(j[idx])
+        ra, rb = find(a), find(b)
+        if ra != rb:
+            parent[ra] = rb
+            comps -= 1
+            thresh = float(w[idx])
+            if comps == 1:
+                break
+    return thresh
+
+
+def _eps_max(D: np.ndarray, frac: float, connect_margin: float) -> float:
+    """Slider upper bound: at least frac x mean-NN (the old default) AND at least
+    connect_margin x the connectivity threshold, so the slider always reaches a
+    fully-connected complex (all points in one component)."""
+    return float(max(frac * _nn(D), connect_margin * _connectivity_threshold(D)))
+
+
+def _build_rips_safe(X: np.ndarray, D: np.ndarray, eps_max: float, max_dim: int,
+                     max_simplices: int = 2_000_000) -> FilteredComplex:
+    """build_rips that, if the requested max_dim overflows max_simplices, retries with
+    a lower max_dim down to 1 (edges only), so a larger slider range never crashes."""
+    md = max_dim
+    while True:
+        try:
+            return build_rips(X, D, eps_max, max_dim=md)
+        except TooLargeError:
+            if md <= 1:
+                raise
+            md -= 1
+
+
 def _pca3(X: np.ndarray) -> np.ndarray:
     Xc = X - X.mean(0)
     _u, _s, Vt = np.linalg.svd(Xc, full_matrices=False)
