@@ -42,6 +42,7 @@ def _args(shape: str, **kw: object) -> argparse.Namespace:
     base: dict[str, object] = dict(
         points=None, value_cols=None, index_cols=None, metric="euclidean",
         n=8, nper=16, k=2, frac=1.6, max_dim=2, title="",
+        eps_max=None, connect_margin=1.2,
     )
     base["shape"] = shape
     base.update(kw)
@@ -187,30 +188,36 @@ def test_is_overfilling_helper() -> None:
     assert not interactive._is_overfilling(0, 0)
 
 
-def test_points_dense_bagel_detects_and_auto_raises(tmp_path: Path) -> None:
-    # The "slider only goes to 0.188" fix: a dense bagel loaded as a point cloud must
-    # (a) be detected as over-filling, and (b) have its slider auto-raised ABOVE the
-    # connectivity epsilon up to the largest feasible epsilon (so more of the surface
-    # renders instead of stopping at connectivity).
+def test_points_dense_bagel_capped_at_feasible(tmp_path: Path) -> None:
+    # The "slider only goes to 0.188" fix, now spanning the FULL Rips range: a dense
+    # bagel loaded as a point cloud must (a) be detected as over-filling, and (b) have
+    # its slider span up to the largest FEASIBLE epsilon -- well above the connectivity
+    # epsilon, but below the infeasible Dmax (which would be millions of simplices).
     X = G.donut_grid(20, 40)
     csv = tmp_path / "bagel.csv"
     PointSet(X).to_csv(str(csv))
-    eps_auto = interactive._eps_max(pairwise_distances(X), 1.6, 1.2)
+    D = pairwise_distances(X)
+    eps_auto = interactive._eps_max(D, 1.6, 1.2)
+    Dmax = float(D.max())
     C, *_ = interactive.build_source(_args("donut", points=str(csv)))
+    eps_max = float(C.values.max())
     n_faces = sum(1 for s in C.simplexes if len(s) == 3)
     assert interactive._is_overfilling(X.shape[0], n_faces), \
         f"expected an over-filling dense bagel, got {n_faces}/{X.shape[0]} faces/vertex"
-    assert float(C.values.max()) > eps_auto, "dense bagel slider must be auto-raised above connectivity"
+    assert eps_max > eps_auto, "slider must reach past connectivity (largest feasible eps)"
+    assert eps_max < Dmax, "a dense bagel's Dmax is infeasible and must be capped"
 
 
-def test_max_feasible_eps_caps_at_wall() -> None:
-    # --eps-max past the feasibility wall is capped (never a crash): the max feasible
-    # epsilon lies within [start, start*max_mult].
-    X = G.donut_grid(20, 40)
-    D = pairwise_distances(X)
-    eps_auto = interactive._eps_max(D, 1.6, 1.2)
-    cap = interactive._max_feasible_eps(X, D, eps_auto, budget=100_000)
-    assert eps_auto <= cap <= eps_auto * 8.0 + 1e-9
+def test_max_feasible_eps_sparse_reaches_dmax() -> None:
+    # The Dmax-as-maximum contract: a SPARSE cloud's max feasible epsilon is exactly
+    # Dmax (the full Rips range is feasible); a DENSE bagel's is strictly below Dmax.
+    sparse = G.circle_grid(24, radius=1.0)
+    Ds = pairwise_distances(sparse)
+    assert abs(interactive._max_feasible_eps(sparse, Ds, float(Ds.max()), budget=160_000)
+               - float(Ds.max())) < 1e-9, "sparse cloud must reach Dmax in full"
+    dense = G.donut_grid(20, 40)
+    Dd = pairwise_distances(dense)
+    assert interactive._max_feasible_eps(dense, Dd, float(Dd.max()), budget=160_000) < float(Dd.max())
 
 
 def test_overfill_note_message() -> None:
@@ -230,6 +237,7 @@ def test_make_torus_dense_donut_warns() -> None:
     from rich.console import Console
     spec = importlib.util.spec_from_file_location("vrtda_make_torus_x", ROOT / "tools" / "make_torus.py")
     mod = importlib.util.module_from_spec(spec)
+    sys.modules["vrtda_make_torus_x"] = mod  # register so beartype_module(__name__) can find it
     spec.loader.exec_module(mod)
     args = argparse.Namespace(kind="donut", grid=True, nper=48, out="/tmp/bagel.csv")
     buf = io.StringIO()
