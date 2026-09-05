@@ -1018,7 +1018,8 @@ def build_payload(args: argparse.Namespace) -> dict[str, object]:
     # what the cards show; only the hypothesis text uses the persistent structure.
     topo_rows: list[list[int]] = table.astype(int).tolist()
     top_claimable = C.kind != "rips"
-    struct_rows = _struct_at(bc, grid, maxdim, top_claimable=top_claimable)
+    prom = _prominent_intervals(bc, eps_max, maxdim, top_claimable=top_claimable)
+    struct_rows = _struct_at(bc, grid, maxdim, top_claimable=top_claimable, prom=prom)
     topo_messages = [_topology_name(row) for row in struct_rows]
     topo_closest = [_closest_topologies(row) for row in struct_rows]
     dyn_messages = [_dynamics_name(row) for row in struct_rows]
@@ -1026,6 +1027,12 @@ def build_payload(args: argparse.Namespace) -> dict[str, object]:
     dyn_transitions: list[str] = [""] * len(topo_rows)
     for i in range(1, len(topo_rows)):
         dyn_transitions[i] = _dynamics_transition(topo_rows[i - 1], topo_rows[i])
+    # systematic per-dimension readings for the H₀/H₁/H₂ toggles: (a) one reading line
+    # per dim per grid row, (b) the recognition for EVERY active-dim mask (the 'only in
+    # single dims' view), (c) the prominent interval cards per dim.
+    dim_summaries = [_dimension_summaries(r, top_claimable) for r in struct_rows]
+    masked_messages = _masked_recognitions(struct_rows, maxdim)
+    dim_intervals = _dim_interval_table(prom, eps_max)
     # Original (multi-dimensional) coordinates of the displayed points, so the browser can
     # re-project interactively (PCA / raw dims / random) without touching the topology.
     raw_cloud = np.asarray(C.params.get("raw", pts), dtype=np.float64)
@@ -1049,6 +1056,7 @@ def build_payload(args: argparse.Namespace) -> dict[str, object]:
 # Priority (3) result is a hypothesis only -- Rips dense clouds never guarantee a read.
     top_claimable = C.kind != "rips"
     feat_index = int(len(table) - 1)
+    feat_route = "exact cell complex (closed complex at max ε)"
     if C.kind != "rips":
         feat_row = [int(b) for b in table[-1]]
     else:
@@ -1058,6 +1066,7 @@ def build_payload(args: argparse.Namespace) -> dict[str, object]:
             h1 = sum(1 for iv in bc.intervals
                      if int(iv.dim) == 1 and float(iv.length) >= 0.30 * eps_max)
             k = int(shell_facts["tangent"])
+            feat_route = "geometric shell read (all points ≈R from centroid, SVD tangent dim)"
             if k == 1:
                 feat_row = [1, 1] + [0] * (maxdim - 1)
                 feat_index = len(table) - 1
@@ -1068,6 +1077,7 @@ def build_payload(args: argparse.Namespace) -> dict[str, object]:
 
         if feat_index == 0:
             # (3) plateau read
+            feat_route = "persistent-plateau hypothesis (Rips, longest stable run of the Betti signature)"
             capped = [[(int(v) if (i < maxdim or maxdim == 0) else 0)
                        for i, v in enumerate(row)] for row in table]
 
@@ -1163,9 +1173,13 @@ def build_payload(args: argparse.Namespace) -> dict[str, object]:
         "dyn_closest": dyn_closest,
         "dyn_transitions": dyn_transitions,
         "struct_rows": struct_rows,
+        "dim_summaries": dim_summaries,
+        "masked_messages": masked_messages,
+        "dim_intervals": dim_intervals,
         "topo_feature": topo_feature,
         "dyn_feature": dyn_feature,
         "feat_row": feat_row,
+        "feat_route": feat_route,
         "shell_facts": shell_facts,
         "intervals": intervals,
     }
@@ -1331,12 +1345,112 @@ def _shell_facts(X: np.ndarray, rms_tol: float = 0.20,
     return {"round": True, "R": R, "rms": rms, "tangent": int(np.median(dims))}
 
 
+def _dimension_summaries(row: list[int], top_claimable: bool) -> list[str]:
+    """One systematic reading PER homology dimension of a structure row: what the k-th
+    Betti number alone claims (components / loops / voids / top class). This is the
+    per-dimension 'show me structure' view -- each line is what THAT dim contributes,
+    decoupled from the others. The top-dim caveat (Rips over-fill) is attached here."""
+    v = [int(x) for x in row]
+    out: list[str] = []
+    for d, b in enumerate(v):
+        if d == 0:
+            if b <= 0:
+                out.append("no component at prominence scale")
+            elif b == 1:
+                out.append("1 connected component — the cloud is a single piece")
+            else:
+                out.append(f"{b} components / clusters still separate (as dynamics "
+                           f"{b} basins) — merge as ε grows")
+        elif d == 1:
+            if b <= 0:
+                out.append("no persistent 1-cycle — nothing winds around (no period, no handle)")
+            elif b == 1:
+                out.append("1 independent loop — one frequency / period (a limit-cycle or "
+                           "S¹ factor; a Tⁿ skeleton needs n loops)")
+            else:
+                out.append(f"{b} independent loops — {b} frequencies (a T^{b}-type "
+                           f"skeleton or a figure-8)")
+        elif b <= 0:
+            out.append(f"no persistent {d}-cycle — no enclosed {d}-void")
+        elif b == 1:
+            caveat = ("" if top_claimable else
+                      " — Rips over-fill is documented, treat as hypothesis until an exact "
+                      "cell complex certifies it")
+            out.append(f"1 independent {d}-cycle — one enclosed {d}-void (a closed "
+                       f"S^{d}/T^{d} top class{caveat})")
+        else:
+            out.append(f"{b} independent {d}-cycles — e.g. a genus-{b // 2} closed "
+                       f"surface or a T^{d}-type void lattice")
+    return out
+
+
+def _masked_recognitions(rows: list[list[int]],
+                         maxdim: int) -> list[dict[int, str]]:
+    """Structure hypothesis for EVERY active-dimension subset (mask bit k = H_k kept):
+    the systematic 'what if only these dims matter' view behind the H₀/H₁/H₂ toggles.
+    A single-dim mask reads as the PURE that-dim structure; multi-dim masks rerun the
+    full catalogue on the masked row. Bounded to 5 dims (32 masks) -- above that only
+    the full mask is shipped (the toggles still hide bars/cards, the badge just says
+    'masked recognition unavailable')."""
+    D = maxdim + 1
+    full = (1 << D) - 1
+    if D <= 5:
+        out: list[dict[int, str]] = []
+        for r in rows:
+            msgs: dict[int, str] = {}
+            for m in range(1, full + 1):
+                masked = [int(r[i]) if (m >> i) & 1 else 0 for i in range(D)]
+                if m & (m - 1) == 0:  # single dimension kept -> the PURE that-dim structure
+                    d = m.bit_length() - 1
+                    b = masked[d]
+                    if d == 0:
+                        if b == 1:
+                            msgs[m] = ("only H₀: everything is one component — the whole "
+                                       "cloud collapses to a single piece")
+                        else:
+                            msgs[m] = (f"only H₀: {b} separate component(s) — the "
+                                       f"cluster / basin count")
+                    elif b == 1:
+                        msgs[m] = (f"only H_{d}: 1 independent {d}-cycle — a single "
+                                   f"{d}-dimensional feature (enclosed {d}-void / frequency)")
+                    else:
+                        msgs[m] = (f"only H_{d}: {b} independent {d}-cycle(s) — the pure "
+                                   f"{d}-dimensional structure")
+                else:
+                    msgs[m] = _topology_name(masked)
+            out.append(msgs)
+        return out
+    return [{full: _topology_name(r)} for r in rows]
+
+
+def _dim_interval_table(prom: dict[int, list[Interval]],
+                        eps_max: float) -> dict[int, list[list[float | None]]]:
+    """Serializable interval cards per dimension (for the systematic panel): birth,
+    death (None when essential), length, share of the full range in %, essential flag.
+    'Alive at the current ε' is derived client-side from birth/death/essential."""
+    tbl: dict[int, list[list[float | None]]] = {}
+    for d, ivs in prom.items():
+        rows: list[list[float | None]] = []
+        for iv in ivs:
+            death = None if not np.isfinite(float(iv.death)) else round(float(iv.death), 5)
+            rows.append([round(float(iv.birth), 5), death,
+                         round(float(iv.length), 5),
+                         round(float(iv.birth) / eps_max * 100.0, 1) if eps_max > 0 else 0.0,
+                         1.0 if bool(iv.is_essential) else 0.0])
+        if rows:
+            tbl[int(d)] = rows
+    return tbl
+
+
 def _struct_at(bc: Barcode, eps_grid: np.ndarray, maxdim: int,
-               top_claimable: bool) -> list[list[int]]:
+               top_claimable: bool,
+               prom: dict[int, list[Interval]] | None = None) -> list[list[int]]:
     """Prominent-Betti 'structure rows' at every slider grid point: which prominent
-    classes are ALIVE there. The top dim is claimed only when the complex is exact."""
-    prom = _prominent_intervals(bc, float(eps_grid[-1]), maxdim,
-                                top_claimable=top_claimable)
+    classes are ALIVE there. The top dim is claimed only when the complex is exact.
+    `prom` can be passed in when the caller computed it anyway (avoids re-derivation)."""
+    if prom is None:
+        prom = _prominent_intervals(bc, float(eps_grid[-1]), maxdim,
+                                    top_claimable=top_claimable)
     rows: list[list[int]] = []
     for e in eps_grid:
         rows.append([sum(1 for iv in prom.get(d, []) if iv.alive_at(float(e)))
@@ -1409,9 +1523,18 @@ def build_layer_trajectory(args: argparse.Namespace) -> dict[str, object]:
         global_betti = _cloud_dynamics_fingerprint(union, sub=120)
         dyn_global = _dynamics_name(global_betti)
         topo_global = _topology_name(global_betti)
+        # per-layer systematic views (same masked-panel mechanism as filtration, D=3)
+        row_list: list[list[int]] = [r for _, r in dyn_rows.items()]
+        key_list: list[int] = [int(L) for L in dyn_rows.keys()]
+        masked_flat = _masked_recognitions(row_list, 2)
+        topo_masked: dict[int, dict[int, str]] = {
+            k: m for k, m in zip(key_list, masked_flat)}
+        topo_dims: dict[int, list[str]] = {
+            int(L): _dimension_summaries(r, False) for L, r in dyn_rows.items()}
     except Exception:
         dyn_messages, dyn_closest, dyn_transitions, dyn_global = {}, {}, {}, ""
         topo_messages, topo_closest, topo_rows, topo_global = {}, {}, {}, ""
+        topo_masked, topo_dims = {}, {}
 
     title = args.title or "Token trajectories across layers"
     sub = (f"layers {layers[0]}…{layers[-1]} ({len(layers)} steps)  ·  {ntok} tokens in a shared "
@@ -1435,6 +1558,8 @@ def build_layer_trajectory(args: argparse.Namespace) -> dict[str, object]:
         "dyn_global": dyn_global,
         "topo_rows": {int(L): [int(v) for v in r] for L, r in topo_rows.items()},
         "topo_messages": topo_messages,
+        "topo_masked": topo_masked,
+        "topo_dims": topo_dims,
         "topo_closest": topo_closest,
         "topo_global": topo_global,
     }
@@ -1486,6 +1611,14 @@ TEMPLATE = r"""<!DOCTYPE html>
   .toggle { display:flex; align-items:center; gap:5px; font-size: 12.5px; color: var(--mut); cursor:pointer; user-select:none; }
   #badge { font-size: 11.5px; color:#2ea043; font-weight:650; }
   #dynbadge { font-size: 11.5px; color:#d39b52; font-weight:600; margin-left: 10px; }
+  #dimsrow { display:inline-flex; flex-wrap:wrap; align-items:center; gap:2px 12px;
+             margin-left:8px; vertical-align: middle; }
+  #dimsrow label { display:inline-flex; align-items:center; gap:4px; cursor:pointer;
+                   user-select:none; color:var(--mut); font-size:12.5px; }
+  #syst { font-size:12px; line-height:1.65; color:var(--txt); }
+  #syst .sl { display:flex; gap:8px; align-items:baseline; }
+  #syst .sl .htag { min-width:28px; font-weight:700; }
+  .card { cursor: help; }
   .card.match { background:#10251a; }
   #legend { display:flex; flex-wrap:wrap; gap:6px 12px; font-size:11.5px; color:var(--mut); }
   #legend .dot { width:10px; height:10px; }
@@ -1510,8 +1643,9 @@ TEMPLATE = r"""<!DOCTYPE html>
     <div id="right">
       <div id="cards"></div>
       <div class="panel" id="p-bfun">
-        <h3>Betti numbers over ε &nbsp;<span id="badge"></span><span id="dynbadge"></span></h3>
+        <h3>Betti numbers over ε <span id="dimsrow"></span><span id="badge"></span><span id="dynbadge"></span></h3>
         <canvas id="bfun" height="150"></canvas>
+        <div id="syst" style="margin-top:6px;"></div>
       </div>
       <div class="panel" id="p-diag">
         <h3>Persistence diagram (birth → death)</h3>
@@ -1608,6 +1742,46 @@ if (MODE === "filtration"){
   el2.className = "card";
   el2.innerHTML = `<div class="lbl">tokens moving</div><div class="num" id="tok-num" style="font-size:26px">0</div>`;
   cardsEl.appendChild(el2);
+}
+
+// ---- per-dimension toggles: see the structure in single dimensions ---------
+// Each dimension gets a checkbox. Turning a dimension off hides its Betti curve,
+// its side card, and reprojects the structure recognition onto the ACTIVE dims
+// (server-precomputed masked_messages): "nur in einzelnen Dims diese Strukturen".
+const dimsRow = document.getElementById("dimsrow");
+const dimsOn = [];
+const N_D = MODE === "filtration" ? MD + 1
+          : Math.max(1, ...Object.keys(DATA.dyn_rows || {}).map(L => (DATA.dyn_rows[L] || []).length));
+const fullMask = (1 << N_D) - 1;
+const SUBD = "\u2080\u2081\u2082\u2083\u2084\u2085\u2086\u2087\u2088\u2089";
+function hsub(d){ return "H" + (SUBD[d] || ("_{" + d + "}")); }
+function activeMask(){
+  let m = 0;
+  for (let d = 0; d < N_D; d++) if (dimsOn[d]) m |= (1 << d);
+  return m;
+}
+function maskLabel(mask){
+  if (!mask) return "";
+  const s = [];
+  for (let d = 0; d < N_D; d++) if (mask & (1 << d)) s.push(hsub(d));
+  return "[" + s.join("\u00b7") + "]";
+}
+function maskedMsg(col, mask){
+  if (!col) return "";
+  if (col[mask] != null) return col[mask];
+  if (mask === fullMask) return "";
+  if (Object.keys(col).length === 1){
+    return "nur volle Struktur analysierbar (zu viele topologische Dimensionen f\u00fcr die Maskierung)";
+  }
+  return "";
+}
+for (let d = 0; d < N_D; d++){
+  dimsOn.push(true);
+  const lab = document.createElement("label");
+  lab.title = "Struktur nur in dieser Dimension anzeigen" + (d === 0 ? " (aus \u2014 die anderen Dimensionen werden maskiert)" : "");
+  lab.innerHTML = `<input type="checkbox" checked><span style="color:${DIM_COLOR[d] || "#ccc"}">${hsub(d)}</span>`;
+  lab.querySelector("input").addEventListener("change", ev => { dimsOn[d] = ev.target.checked; render(); });
+  dimsRow.appendChild(lab);
 }
 
 // ---- canvas sizing -------------------------------------------------------
@@ -1849,6 +2023,7 @@ function renderBfun(){
   const X = i => m + (i/(GRID.length-1))*pw, Y = v => 8 + ph - (v/maxB)*ph;
   bctx.strokeStyle="#3a4553"; bctx.strokeRect(m,8,pw,ph);
   for (let d=0; d<=MD; d++){
+    if (!dimsOn[d]) continue;
     bctx.strokeStyle = DIM_COLOR[d]; bctx.lineWidth=1.6; bctx.beginPath();
     for (let i=0;i<GRID.length;i++){
       const x=X(i), y=Y(TABLE[i][d]);
@@ -1861,6 +2036,7 @@ function renderBfun(){
   bctx.moveTo(cx,8); bctx.lineTo(cx,8+ph); bctx.stroke(); bctx.globalAlpha=1;
   let lx = m+6;
   for (let d=0; d<=MD; d++){
+    if (!dimsOn[d]) continue;
     bctx.fillStyle = DIM_COLOR[d]; bctx.fillRect(lx, h-6, 9, 3);
     bctx.fillStyle="#8b98a9"; bctx.font="10px system-ui";
     bctx.fillText("β"+d, lx+11, h-1); lx += 34;
@@ -1884,6 +2060,7 @@ function renderBfunTraj(){
   for (const L of Ls){
     const x = m + Ls.indexOf(L)*cw;
     for (let d=0; d<rows[L].length; d++){
+      if (!dimsOn[d]) continue;
       bctx.fillStyle = DIM_COLOR[d];
       const bh = (rows[L][d]/maxB)*ph;
       bctx.fillRect(x+2+d*cw*0.28, 8+ph-bh, cw*0.24, bh);
@@ -1895,6 +2072,7 @@ function renderBfunTraj(){
   bctx.moveTo(cx,8); bctx.lineTo(cx,8+ph); bctx.stroke(); bctx.globalAlpha=1;
   let lx = m+6;
   for (let d=0; d<Math.max(1,...Ls.map(L=>rows[L].length)); d++){
+    if (!dimsOn[d]) continue;
     bctx.fillStyle = DIM_COLOR[d]; bctx.fillRect(lx, h-6, 9, 3);
     bctx.fillStyle="#8b98a9"; bctx.font="10px system-ui";
     bctx.fillText("β"+d, lx+11, h-1); lx += 34;
