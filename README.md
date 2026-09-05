@@ -240,6 +240,35 @@ filtration, not just data points):
 - **`torus-grid`** (default) uses the *exact* torus cell complex (not a noisy Rips cloud),
   so the torus settles cleanly on **β = [1, 2, 1]**: β₀ collapses to 1 as the surface
   connects, β₁ rises to 2 (the two loops), β₂ settles to 1 (the void).
+- **`donut`** is the same exact T² complex shown as a 3D bagel — the reliable way to
+  *see* a clean torus. **`donut-rips`** is the honest Vietoris–Rips version over the full
+  ε range, kept to demonstrate Rips in action (and why it can't resolve a dense bagel).
+
+```bash
+# the clean bagel (exact T^2, instant, β = [1,2,1])
+uv run tools/interactive.py --shape donut --nper 24 --out donut.html
+# honest full-range Rips on a bagel (capped at 8x8 so it stays feasible)
+uv run tools/interactive.py --shape donut-rips --nper 8 --out donut-rips.html
+```
+
+> **⚠️ Why a dense bagel point cloud never reads a clean torus under Rips**
+> (reproduced: `make_torus --kind donut --nper 64 --grid` → 1536-pt bagel →
+> `--points that.csv` reads **β₁ = 25**, **β₂ ≈ 62,064**, not the true **[1, 2, 1]**).
+> Vietoris–Rips on a *dense* 2-manifold keeps far more triangles per vertex than a clean
+> triangulation (~1.5), so its 2-skeleton **fills the torus void** and shreds β₁ into the
+> grid's many short loops. There is no ε at which a dense Rips bagel reads β₁ = 2 — the
+> surface-completion ε is in the infeasible (>~300k simplex) range.
+>
+> **Mitigations (kept in sync across the codebase):**
+> 1. **To *see* a clean torus**, use `--shape donut` (exact T² cell complex) — instant, β = [1,2,1].
+> 2. **To watch Rips** on a bagel, use `--shape donut-rips` (capped at `nper ≤ 8`).
+> 3. **Loading your own CSV** (`--points`) that is a dense surface prints a yellow
+>    *over-filling* NOTE (triangles/vertex ≫ 1.5) so the artifact Betti numbers aren't
+>    mistaken for the true topology.
+>
+> Code guards: the `IMPORTANT` block at the top of `tools/interactive.py`,
+> `build_rips` in `vrtda/complexes.py`, `betti_function` in `vrtda/persistence.py`,
+> and the regression test `tests/test_interactive_display.py::test_donut_rips_full_range_overfills`.
 
 ### `methods.py` — the selectable attractor-method suite  ⭐
 

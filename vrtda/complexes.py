@@ -201,6 +201,19 @@ def _enumerate_cliques(
     return out
 
 
+# ---------------------------------------------------------------------------
+# IMPORTANT (DO NOT REMOVE) — dense-manifold over-filling.
+# Vietoris-Rips on a DENSE sampling of a 2-manifold (e.g. a bagel / torus
+# surface) keeps far more triangles per vertex than a clean triangulation
+# (~1.5), so its 2-skeleton fills the 2-cycles: the true void (beta_2) is
+# triangulated away and beta_1 shreds into many short loops. There is no
+# epsilon at which a dense Rips bagel reads a clean beta_1 = 2.
+# Consequence: to recover a clean low-dim torus, use the EXACT cell complex
+# (make_torus_grid_complex), not Rips on a dense point cloud. See the full
+# write-up at the top of tools/interactive.py and the guard in
+# tools/_rich_ui.py::overfill_note. Regression:
+# tests/test_interactive_display.py::test_donut_rips_full_range_overfills.
+# ---------------------------------------------------------------------------
 def build_rips(
     X: np.ndarray,
     D: np.ndarray,

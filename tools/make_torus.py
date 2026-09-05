@@ -43,6 +43,12 @@ def build(args: argparse.Namespace) -> np.ndarray:
             return G.product_torus_grid(args.k, args.nper, radius=args.radius)
         return G.product_torus(args.k, n=args.n * args.nper, radius=args.radius, seed=args.seed, noise=args.noise)
     if args.kind == "donut":
+        # IMPORTANT: this produces a bagel POINT CLOUD. If you later view that CSV via
+        # Rips (e.g. `interactive.py --points out.csv`), a DENSE grid over-fills: the
+        # 2-skeleton triangulates the torus void, so it reads beta_1 = ~n (the grid's
+        # loops) and a huge beta_2 instead of the true [1, 2, 1]. To see a clean torus
+        # use `interactive.py --shape donut` (exact T^2 cell complex), or keep the grid
+        # sparse. See the IMPORTANT note block at the top of tools/interactive.py.
         if args.grid:
             return G.donut_grid(args.n, args.nper, R=args.radius, r=args.minor)
         return G.donut(args.n * args.nper, R=args.radius, r=args.minor, seed=args.seed, noise=args.noise)

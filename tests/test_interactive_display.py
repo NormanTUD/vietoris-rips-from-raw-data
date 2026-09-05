@@ -160,9 +160,13 @@ def test_donut_matches_torus_grid_topology() -> None:
 
 
 def test_donut_rips_full_range_overfills() -> None:
-    # --shape donut-rips is honest Rips over the FULL range eps 0 -> max pairwise
-    # distance: the slider reaches Dmax and the complex is fully connected there
-    # (beta_0 = 1), but the bagel over-fills so the clean beta_1 = 2 is NOT read.
+    # REGRESSION GUARD for the dense-bagel Rips over-filling bug (see the IMPORTANT
+    # block at the top of tools/interactive.py). --shape donut-rips is honest Rips over
+    # the FULL range eps 0 -> max pairwise distance: the slider reaches Dmax and the
+    # complex is fully connected there (beta_0 = 1), but the bagel OVER-FILLS so the
+    # clean beta_1 = 2 is NOT read (beta_1 stays at the grid's loop count, beta_2
+    # blows up). This documents that Rips genuinely cannot resolve a dense bagel to a
+    # clean torus, so `--shape donut` (exact) remains the reliable path.
     C, *_ = interactive.build_source(_args("donut-rips", nper=8))
     X = G.donut_grid(8, 8)
     D = pairwise_distances(X)

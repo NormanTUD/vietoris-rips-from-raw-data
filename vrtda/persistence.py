@@ -53,6 +53,12 @@ class Barcode:
         return out
 
     def betti_function(self, epsilons: Sequence[float] | np.ndarray) -> np.ndarray:
+        # NOTE (IMPORTANT): these Betti numbers are only as good as the complex they
+        # come from. On a DENSE Rips point cloud (e.g. a 1536-point bagel) the complex
+        # over-fills the higher dimensions, so beta_2 explodes and beta_1 is stuck at
+        # the grid's loop count -- a sampling artifact, not the true topology. For a
+        # clean low-dim torus use the exact T^2 cell complex. Full write-up: the
+        # IMPORTANT block at the top of tools/interactive.py.
         eps = np.asarray(epsilons, dtype=np.float64)
         md = self.max_dim()
         arr = np.zeros((len(eps), md + 1), dtype=np.int64)
