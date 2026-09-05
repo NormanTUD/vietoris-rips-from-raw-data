@@ -169,9 +169,9 @@ def build_source(args: argparse.Namespace) -> tuple[FilteredComplex, np.ndarray,
         # beta_0..beta_2; raise --max-dim for genuinely higher-dimensional shapes.
         X = PointSet.from_csv(args.points, value_cols=args.value_cols, index_cols=args.index_cols).data
         D = pairwise_distances(X, args.metric)
-        eps_max = args.frac * _nn(D)
+        eps_max = _eps_max(D, args.frac, args.connect_margin)
         max_dim = max(3, args.max_dim)
-        C = build_rips(X, D, eps_max, max_dim=max_dim)
+        C = _build_rips_safe(X, D, eps_max, max_dim)
         pts, proj = _to3d(X, "rips")
         return C, pts, proj, None, min(max_dim - 1, 3)
 
@@ -219,13 +219,13 @@ def build_source(args: argparse.Namespace) -> tuple[FilteredComplex, np.ndarray,
         raise SystemExit(f"unknown shape {args.shape!r}")
 
     D = pairwise_distances(X, args.metric)
-    eps_max = args.frac * _nn(D)
+    eps_max = _eps_max(D, args.frac, args.connect_margin)
     # Cap at 3-simplices: this is a fast beta_0..beta_2 visualizer, and (k+1)-simplices
     # are combinatorially infeasible for k>=3 (5-cliques explode). For k>=3 the low
     # dimensions beta_0..beta_2 are still exact under Rips; the top class needs the
     # exact cell complex (see tests/test_betti_shapes.py).
     max_dim = min(max(k + 1, 2, args.max_dim), 3)
-    C = build_rips(X, D, eps_max, max_dim=max_dim)
+    C = _build_rips_safe(X, D, eps_max, max_dim)
     if args.shape == "product" and k == 2:
         # The R^4 product 2-torus is 4-fold symmetric, so a PCA-3D view collapses to a
         # bare cylinder. Show the classic bagel instead: donut_grid(n,n) is the exact
@@ -874,6 +874,9 @@ def main() -> int:
     p.add_argument("--nper", type=int, default=10, help="points per circle (donut/product grids)")
     p.add_argument("--k", type=int, default=2, help="ambient dim for product/sphere")
     p.add_argument("--frac", type=float, default=1.6, help="Rips: eps_max as a fraction of mean nearest-neighbour distance")
+    p.add_argument("--connect-margin", type=float, default=1.2,
+                   help="slider reaches at least this many x the connectivity threshold, so at max "
+                        "epsilon all points form one connected complex (default 1.2). Use 0 to disable.")
     p.add_argument("--n-grid", type=int, default=140, help="epsilon grid resolution for Betti curve / slider")
     p.add_argument("--title", default="")
     p.add_argument("--out", default="interactive.html", help="output HTML file")
