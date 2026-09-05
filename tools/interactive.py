@@ -65,6 +65,36 @@ from vrtda import datasets, generators as G
 from vrtda.beartype_guard import beartype_module
 
 
+# =====================================================================
+# IMPORTANT (DO NOT REMOVE) — the dense-bagel Rips over-filling bug.
+# ---------------------------------------------------------------------
+# ERROR (reproduced with `make_torus --kind donut --nper 64 --grid` -> a
+#   1536-point bagel, then `--points that.csv`): the Betti numbers read
+#   beta_1 = 25 (stuck at the grid's loop count) and beta_2 explodes
+#   (~62,064 voids) instead of the true beta_1 = 2, beta_2 = 1. There is
+#   NO epsilon at which a dense Rips bagel reads a clean beta_1 = 2: just
+#   past connectivity the triangles already triangulate the holes away,
+#   and the surface-completion epsilon is in the infeasible (>~300k
+#   simplex) range, so the honest full-range Rips bagel never resolves.
+# ROOT CAUSE: Vietoris-Rips on a dense 2-manifold keeps far more triangles
+#   per vertex than a clean triangulation (~1.5), so its 2-skeleton fills
+#   the 2-cycles (the torus void) and shreds beta_1 into many short loops.
+#   This is a property of Rips on dense point clouds, NOT a code bug.
+# MITIGATION (three layers, keep them in sync):
+#   (a) To SEE a clean torus, use `--shape donut` -> the exact T^2 cell
+#       complex (fast, reads exactly [1, 2, 1]); see _exact_torus2 below.
+#   (b) `--shape donut-rips` (honest full-range Rips) is capped at
+#       nper <= 8 so a feasible epsilon exists.
+#   (c) The `--points` path below prints _rich_ui.overfill_note() when it
+#       detects over-filling (faces > _OVERFILL_FACE_RATIO * vertices).
+# Regression guard: tests/test_interactive_display.py::
+#   test_donut_rips_full_range_overfills.
+# =====================================================================
+# faces/vertex above which we flag a dense cloud as over-filling (a clean
+# 2-manifold triangulation has ~1.5; over-filled Rips reaches tens).
+_OVERFILL_FACE_RATIO: float = 5.0
+
+
 def _nn(D: np.ndarray) -> float:
     d = D.copy(); np.fill_diagonal(d, np.inf)
     return float(d.min(1).mean())
