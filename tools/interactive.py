@@ -253,16 +253,19 @@ def build_source(args: argparse.Namespace) -> tuple[FilteredComplex, np.ndarray,
         return _exact_torus2(args.n, "torus_grad", "torus-grid surface (exact T^2 cell complex)")
 
     if args.shape == "donut":
-        # The clean bagel: exact T^2 cell complex (fast, beta = [1,2,1] at the top,
-        # both rings visible). This is the shape to use to SEE a torus. The Rips
-        # version (--shape donut-rips) is kept for watching Rips in action.
+        # MITIGATION (a): the clean bagel = exact T^2 cell complex (NOT Rips). Fast and
+        # reads exactly [1, 2, 1] at the top, both rings visible. THIS is the shape to
+        # use to SEE a torus reliably. (Rips on a dense bagel over-fills -- see the
+        # IMPORTANT note block at the top of this file.)
         return _exact_torus2(max(args.nper, 8), "donut", "donut / bagel (exact T^2 cell complex)")
 
     if args.shape == "donut-rips":
-        # Real Vietoris-Rips on a bagel, slider over the FULL range eps 0 -> max
-        # pairwise distance. A genuine Rips demonstration, but the bagel over-fills:
-        # beta_1 never cleanly reads 2 (it spikes then collapses) and beta_2 blows up
-        # as the holes get triangulated away. Homology is slow, so cap the grid.
+        # MITIGATION (b): Real Vietoris-Rips on a bagel, slider over the FULL range
+        # eps 0 -> max pairwise distance. A genuine Rips demonstration, but the bagel
+        # over-fills: beta_1 never cleanly reads 2 (it spikes then collapses) and
+        # beta_2 blows up as the holes get triangulated away (see the IMPORTANT note
+        # block at the top). Homology is slow, so cap the grid at nper <= 8 so a
+        # feasible epsilon exists.
         nper = min(args.nper, 8)
         if nper != args.nper:
             print(f"[donut-rips] full-range Rips homology is slow; capping grid "
