@@ -212,7 +212,10 @@ def build_source(args: argparse.Namespace) -> tuple[FilteredComplex, np.ndarray,
         X = G.product_torus_grid(args.k, args.nper); k = int(args.k)
         target = _torus_betti(k) if k <= 2 else None
     elif args.shape == "sphere":
-        X = G.sphere(args.n, dim=max(1, args.k - 1), radius=1.0); k = max(1, args.k - 1); target = None
+        # --k is the sphere dimension: --k 2 -> S^2 (a ball in R^3). Use enough points
+        # to read the surface (honours --n and --nper, whichever is larger).
+        nsp = max(args.n, args.nper)
+        X = G.sphere(nsp, dim=max(1, args.k), radius=1.0); k = max(1, args.k); target = None
     elif args.shape == "blobs":
         X = G.gmm(3, args.n, 3); k = 0; target = None
     else:
