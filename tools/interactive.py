@@ -646,35 +646,58 @@ function renderScene(){
   if (showFaces && F.length){
     // Painter's (back-to-front) order depends only on the view, not eps. Recompute
     // it only when the view rotates; the rounded key throttles re-sorts during a
-    // drag. (Re-sorting all faces on every frame is what made this ultra-slow.)
+    // drag. (Re-sorting every face on every frame is what made this ultra-slow.)
     const vkey = (Math.round(rx*50)) + "," + (Math.round(ry*50));
     if (faceOrderKey !== vkey){
       faceOrder = F.map((_, i) => i);
       faceOrder.sort((a,b)=>{
         const fa=F[a], fb=F[b];
-        const za=proj[fa[0]][2]+proj[fa[1]][2]+proj[fa[2]][2];
-        const zb=proj[fb[0]][2]+proj[fb[1]][2]+proj[fb[2]][2];
-        return za-zb;
+        return (proj[fa[0]][2]+proj[fa[1]][2]+proj[fa[2]][2])
+             - (proj[fb[0]][2]+proj[fb[1]][2]+proj[fb[2]][2]);
       });
       faceOrderKey = vkey;
     }
-    // With a dense mesh the per-face wireframe stroke doubles the draw cost and just
-    // reads as a solid surface, so drop it once many faces are active.
-    const doStroke = shade && countActiveFaces(eps) <= 8000;
-    sctx.lineWidth = 0.6;
-    for (const i of faceOrder){
-      const f = F[i];
-      if (f[3] > eps) continue;
-      const base = colormap(f[3]/EMAX);
-      const col = shade ? shadeColor(proj[f[0]],proj[f[1]],proj[f[2]],base,fitR) : base;
-      sctx.beginPath();
-      sctx.moveTo(scr[f[0]][0], scr[f[0]][1]);
-      sctx.lineTo(scr[f[1]][0], scr[f[1]][1]);
-      sctx.lineTo(scr[f[2]][0], scr[f[2]][1]);
-      sctx.closePath();
-      sctx.fillStyle = rgba(col, shade ? 0.6 : 0.16);
-      sctx.fill();
-      if (doStroke){ sctx.strokeStyle = rgba(col, 0.85); sctx.stroke(); }
+    const alpha = shade ? 0.6 : 0.16;
+    if (F.length <= 2000){
+      // small mesh: one path per face (keeps the crisp per-face wireframe)
+      sctx.lineWidth = 0.6;
+      for (const i of faceOrder){
+        const f = F[i]; if (f[3] > eps) continue;
+        const base = colormap(f[3]/EMAX);
+        const col = shade ? shadeColor(proj[f[0]],proj[f[1]],proj[f[2]],base,fitR) : base;
+        sctx.beginPath();
+        sctx.moveTo(scr[f[0]][0], scr[f[0]][1]);
+        sctx.lineTo(scr[f[1]][0], scr[f[1]][1]);
+        sctx.lineTo(scr[f[2]][0], scr[f[2]][1]);
+        sctx.closePath();
+        sctx.fillStyle = rgba(col, alpha);
+        sctx.fill();
+        if (shade){ sctx.strokeStyle = rgba(col, 0.85); sctx.stroke(); }
+      }
+    } else {
+      // dense mesh: bucket faces by quantised colour and issue ONE fill per bucket
+      // (41k individual fills -> a few hundred), which keeps shading but is fast.
+      const buckets = new Map();
+      for (const i of faceOrder){
+        const f = F[i]; if (f[3] > eps) continue;
+        const base = colormap(f[3]/EMAX);
+        const col = shade ? shadeColor(proj[f[0]],proj[f[1]],proj[f[2]],base,fitR) : base;
+        const key = (((col[0]|0)>>5)&7)*64 + (((col[1]|0)>>5)&7)*8 + (((col[2]|0)>>5)&7);
+        let g = buckets.get(key);
+        if (!g){ g = {col: col, faces: []}; buckets.set(key, g); }
+        g.faces.push(f);
+      }
+      for (const g of buckets.values()){
+        sctx.fillStyle = rgba(g.col, alpha);
+        sctx.beginPath();
+        for (const f of g.faces){
+          sctx.moveTo(scr[f[0]][0], scr[f[0]][1]);
+          sctx.lineTo(scr[f[1]][0], scr[f[1]][1]);
+          sctx.lineTo(scr[f[2]][0], scr[f[2]][1]);
+          sctx.closePath();
+        }
+        sctx.fill();
+      }
     }
   }
   if (showEdges){
