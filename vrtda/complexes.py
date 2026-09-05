@@ -165,27 +165,39 @@ def _enumerate_cliques(
             add_batch(tri, 2, vals)
 
     if max_dim >= 3:
-        triangles = np.array([s for (v, d, s) in out if d == 2], dtype=int)
-        if triangles.size:
-            for (i, j, k) in triangles:
-                cand = A[i] & A[j] & A[k]
-                cand[: k + 1] = False
-                l = np.where(cand)[0]
-                if l.size == 0:
-                    continue
-                tri = np.column_stack([
-                    np.full(l.size, i), np.full(l.size, j), np.full(l.size, k), l
-                ])
-                vals = np.maximum(
-                    np.maximum(
-                        np.maximum(D[i, j], D[i, k]), np.maximum(D[j, k], D[i, l])
-                    ),
-                    np.maximum(D[j, l], D[k, l]),
-                )
-                add_batch(tri, 3, vals)
-
-    if max_dim > 3:
-        raise FiltrationError(f"max_dim={max_dim} > 3 not supported for clique enumeration")
+        # Incremental k-clique enumeration. A d-simplex has d+1 vertices; we build
+        # it from a (d-1)-simplex (d vertices) by adding one higher-indexed vertex
+        # adjacent to all of them. This is exactly what fills the "(d+1)-shells"
+        # that would otherwise appear as spurious H_d when the complex is capped.
+        cur: list[tuple[float, tuple[int, ...]]] = [(v, s) for (v, dd, s) in out if dd == 2]
+        for d in range(3, max_dim + 1):
+            if not cur:
+                break
+            nxt: list[tuple[float, tuple[int, ...]]] = []
+            for val, c in cur:
+                hi = c[-1]
+                cand: np.ndarray | None = None
+                for x in c:
+                    cand = A[x].copy() if cand is None else cand & A[x]
+                assert cand is not None
+                cand[: hi + 1] = False
+                for v in np.where(cand)[0]:
+                    vi = int(v)
+                    nv = val
+                    for x in c:
+                        dv = D[vi, x]
+                        if dv > nv:
+                            nv = dv
+                    nxt.append((float(nv), c + (vi,)))
+            if nxt:
+                if max_simplices and len(out) + len(nxt) > max_simplices:
+                    raise TooLargeError(
+                        f"simplices exceeded max_simplices={max_simplices}; lower eps_max or max_dim "
+                        f"(currently {len(out)}, adding {len(nxt)} dim-{d})"
+                    )
+                for nv, s in nxt:
+                    out.append((nv, d, s))
+            cur = nxt
     return out
 
 
@@ -299,6 +311,61 @@ def make_torus_grid_complex(k: int, cells: Sequence[int], name: str = "torus_gri
         ordered.append((float(d), d, s))
     with debug.timing(f"make_torus_grid_complex k={k} cells={cells}"):
         return _sort_and_build(ordered, "torus_grid", {"k": k, "cells": cells, "name": name})
+
+
+def _add_midpoint(verts: list[tuple[float, float, float]], a: int, b: int) -> int:
+    va = verts[a]
+    vb = verts[b]
+    verts.append(((va[0] + vb[0]) / 2.0, (va[1] + vb[1]) / 2.0, (va[2] + vb[2]) / 2.0))
+    return len(verts) - 1
+
+
+def make_sphere_complex(n_sub: int = 2, name: str = "sphere") -> FilteredComplex:
+    """The exact cell complex of a 2-sphere as a triangulated icosphere.
+
+    Subdivides an icosahedron `n_sub` times (each face -> 4). The result is a genuine
+    S^2 triangulation (Euler char 2) filtered by dimension, so persistent homology at
+    the top value is exactly [1, 0, 1] -- a clean H_2 reference that does not suffer
+    from the spurious-H_2 that a truncated Rips complex exhibits.
+    """
+    if n_sub < 0:
+        raise FiltrationError("n_sub must be >= 0")
+    t = (1.0 + 5.0 ** 0.5) / 2.0
+    verts: list[tuple[float, float, float]] = [
+        (-1.0, t, 0.0), (1.0, t, 0.0), (-1.0, -t, 0.0), (1.0, -t, 0.0),
+        (0.0, -1.0, t), (0.0, 1.0, t), (0.0, -1.0, -t), (0.0, 1.0, -t),
+        (t, 0.0, -1.0), (t, 0.0, 1.0), (-t, 0.0, -1.0), (-t, 0.0, 1.0),
+    ]
+    faces: list[tuple[int, int, int]] = [
+        (0, 11, 5), (0, 5, 1), (0, 1, 7), (0, 7, 10), (0, 10, 11), (1, 5, 9),
+        (5, 11, 4), (11, 10, 2), (10, 7, 6), (7, 1, 8), (3, 9, 4), (3, 4, 2),
+        (3, 2, 6), (3, 6, 8), (3, 8, 9), (4, 9, 5), (2, 4, 11), (6, 2, 10),
+        (8, 6, 7), (9, 8, 1),
+    ]
+    for _ in range(n_sub):
+        new_faces: list[tuple[int, int, int]] = []
+        cache: dict[tuple[int, int], int] = {}
+        for (a, b, c) in faces:
+            pairs = ((a, b), (b, c), (c, a))
+            for p, q in pairs:
+                key = (p, q) if p < q else (q, p)
+                if key not in cache:
+                    cache[key] = _add_midpoint(verts, p, q)
+            ab = cache[(a, b) if a < b else (b, a)]
+            bc = cache[(b, c) if b < c else (c, b)]
+            ca = cache[(c, a) if c < a else (a, c)]
+            new_faces += [(a, ab, ca), (b, bc, ab), (c, ca, bc), (ab, bc, ca)]
+        faces = new_faces
+
+    simp_set: set[tuple[int, ...]] = set()
+    for i in range(len(verts)):
+        simp_set.add((i,))
+    for (a, b, c) in faces:
+        for s in ((a, b), (b, c), (c, a), (a, b, c)):
+            simp_set.add(tuple(sorted(s)))
+    ordered = [(float(len(s) - 1), len(s) - 1, s) for s in simp_set]
+    with debug.timing(f"make_sphere_complex n_sub={n_sub} n_verts={len(verts)}"):
+        return _sort_and_build(ordered, "sphere", {"n_sub": n_sub, "name": name})
 
 
 from vrtda.beartype_guard import beartype_module as _beartype_module

@@ -5,7 +5,7 @@ import pytest
 
 from vrtda import pairwise_distances, build_rips, build_vietoris, FilteredComplex
 from vrtda.beartype_guard import beartype_module
-from vrtda.errors import FiltrationError, TooLargeError
+from vrtda.errors import TooLargeError
 
 
 def test_vertex_count() -> None:
@@ -68,11 +68,17 @@ def test_too_large_raises() -> None:
         build_rips(pts, D, 1e9, max_dim=2, max_simplices=100)
 
 
-def test_max_dim_too_high() -> None:
-    pts = np.random.default_rng(4).normal(size=(5, 3))
+def test_high_max_dim_supported() -> None:
+    # max_dim is no longer capped at 3: higher-d simplices (tetrahedra, 4-simplices, ...)
+    # are enumerated so that "(d+1)-shells" can be filled and spurious H_d removed.
+    pts = np.random.default_rng(4).normal(size=(12, 3))
     D = pairwise_distances(pts)
-    with pytest.raises(FiltrationError):
-        build_rips(pts, D, 1.0, max_dim=4)
+    for md in (3, 4, 5):
+        C = build_rips(pts, D, 2.0, max_dim=md)
+        assert C.max_dim() <= md
+        for j, s in enumerate(C.simplexes):
+            for face in C.boundary_faces(j):
+                assert face < j, f"dim<={md}: face {face} not before coface {j}"
 
 
 def test_vietoris_subset_of_rips_scale() -> None:

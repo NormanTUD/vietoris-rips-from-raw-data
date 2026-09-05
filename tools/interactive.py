@@ -91,24 +91,41 @@ def _torus_surface(nu: int, nv: int, R: float = 1.0, r: float = 0.35) -> np.ndar
     return np.column_stack([x, y, z])
 
 
-def build_source(args: argparse.Namespace) -> tuple[FilteredComplex, np.ndarray, str, list[int] | None]:
-    """Return (complex, display_points_3d, projection_label, target_betti_or_None)."""
+def _torus_betti(k: int) -> list[int]:
+    """Betti numbers of the k-torus S^1 x ... x S^1: beta_d = C(k, d)."""
+    from math import comb
+    return [int(comb(k, d)) for d in range(k + 1)]
+
+
+def build_source(args: argparse.Namespace) -> tuple[FilteredComplex, np.ndarray, str, list[int] | None, int]:
+    """Return (complex, display_points_3d, projection_label, target_betti_or_None, report_dim).
+
+    report_dim is the highest Betti number to display. For a shape of intrinsic
+    dimension k the Rips complex is built with max_dim = k + 1, so simplices up to
+    dimension k + 1 fill the "(d+1)-shells" that would otherwise persist as spurious
+    H_d (this is what produced beta_2 = 257 on a 2-torus when capped at triangles).
+    We then report only beta_0..beta_k, which is the true topology. Validation suite:
+    tests/test_betti_shapes.py.
+    """
     if args.points is not None:
-        # Rips on an arbitrary point cloud (any dimension; PCA-projected if > 3D)
+        # Arbitrary point cloud (any ambient dim; PCA-projected if > 3D). The intrinsic
+        # dim is unknown, so default to max_dim=3 (guarantees clean H0..H2) and report
+        # beta_0..beta_2; raise --max-dim for genuinely higher-dimensional shapes.
         X = PointSet.from_csv(args.points, value_cols=args.value_cols, index_cols=args.index_cols).data
         D = pairwise_distances(X, args.metric)
         eps_max = args.frac * _nn(D)
-        C = build_rips(X, D, eps_max, max_dim=args.max_dim)
+        max_dim = max(3, args.max_dim)
+        C = build_rips(X, D, eps_max, max_dim=max_dim)
         pts, proj = _to3d(X, "rips")
-        return C, pts, proj, None
+        return C, pts, proj, None, min(max_dim - 1, 3)
 
     if args.shape == "torus-grid":
         nu = args.n
         C = make_torus_grid_complex(2, (nu, nu))
         simps = list(C.simplexes)
 
-        def i_of(k: int) -> int:
-            return k % nu
+        def i_of(j: int) -> int:
+            return j % nu
 
         vals = []
         for s in simps:
@@ -127,29 +144,34 @@ def build_source(args: argparse.Namespace) -> tuple[FilteredComplex, np.ndarray,
             {"nu": nu, "nv": nu},
         )
         pts = _torus_surface(nu, nu)
-        return C, pts, "torus-grid surface (exact T^2 cell complex)", [1, 2, 1]
+        return C, pts, "torus-grid surface (exact T^2 cell complex)", [1, 2, 1], int(C.max_dim())
 
-    # Rips-based synthetic sources
+    # Rips-based synthetic sources: each has a known intrinsic dimension k, and (for the
+    # clean samplings) a known target Betti vector.
     if args.shape == "circle":
-        X = G.circle_grid(args.n, radius=1.0); src = f"circle ({args.n} pts)"
+        X = G.circle_grid(args.n, radius=1.0); k = 1; target = [1, 1]
     elif args.shape == "donut":
-        X = G.donut_grid(args.nper, args.nper); src = f"donut surface ({args.nper}x{args.nper})"
+        X = G.donut_grid(args.nper, args.nper); k = 2; target = None
     elif args.shape == "product":
-        X = G.product_torus_grid(args.k, args.nper); src = f"{args.k}-torus cloud ({args.nper}^{args.k})"
+        X = G.product_torus_grid(args.k, args.nper); k = int(args.k)
+        target = _torus_betti(k) if k <= 2 else None
     elif args.shape == "sphere":
-        X = G.sphere(args.n, dim=args.k - 1, radius=1.0); src = f"S^{args.k-1} ({args.n} pts)"
+        X = G.sphere(args.n, dim=max(1, args.k - 1), radius=1.0); k = max(1, args.k - 1); target = None
     elif args.shape == "blobs":
-        X = G.gmm(3, args.n, 2); src = "3 gaussian blobs"
+        X = G.gmm(3, args.n, 2); k = 0; target = None
     else:
         raise SystemExit(f"unknown shape {args.shape!r}")
 
     D = pairwise_distances(X, args.metric)
-    nn = _nn(D)
-    eps_max = args.frac * nn
-    C = build_rips(X, D, eps_max, max_dim=args.max_dim)
+    eps_max = args.frac * _nn(D)
+    # Cap at 3-simplices: this is a fast beta_0..beta_2 visualizer, and (k+1)-simplices
+    # are combinatorially infeasible for k>=3 (5-cliques explode). For k>=3 the low
+    # dimensions beta_0..beta_2 are still exact under Rips; the top class needs the
+    # exact cell complex (see tests/test_betti_shapes.py).
+    max_dim = min(max(k + 1, 2, args.max_dim), 3)
+    C = build_rips(X, D, eps_max, max_dim=max_dim)
     pts, proj = _to3d(X, "rips")
-    target = [1, 1] if args.shape == "circle" else None
-    return C, pts, proj, target
+    return C, pts, proj, target, min(k, 2)
 
 
 def _round_list(x: list[float], nd: int = 5) -> list[float]:
@@ -157,14 +179,14 @@ def _round_list(x: list[float], nd: int = 5) -> list[float]:
 
 
 def build_payload(args: argparse.Namespace) -> dict[str, object]:
-    C, pts, proj, target = build_source(args)
+    C, pts, proj, target, report_dim = build_source(args)
     bc = persistent_homology(C)
-    md = max(args.max_dim, C.max_dim()) if args.shape != "torus-grid" else C.max_dim()
     eps_max = float(C.values.max())
     n_grid = args.n_grid
     grid = np.linspace(0.0, eps_max, n_grid)
     table = bc.betti_function(grid)
-    maxdim = int(table.shape[1] - 1)
+    maxdim = min(report_dim, int(table.shape[1] - 1))
+    table = table[:, :maxdim + 1]
 
     n = len(pts)
     edges = [[int(a), int(b), round(float(C.values[C.index_of((int(a), int(b)))]), 5)]
@@ -173,11 +195,12 @@ def build_payload(args: argparse.Namespace) -> dict[str, object]:
              for (a, b, c) in (s for s in C.simplexes if len(s) == 3)]
     intervals = []
     for iv in bc.intervals:
+        if iv.dim > maxdim:
+            continue
         death = eps_max if not np.isfinite(iv.death) else float(iv.death)
         intervals.append([int(iv.dim), round(float(iv.birth), 5), round(death, 5)])
 
     title = args.title or C.kind
-    ndim = int(pts.shape[1])
     extra = ""
     if "PCA" in proj:
         extra = f" · topology computed in the original high-dim space"
