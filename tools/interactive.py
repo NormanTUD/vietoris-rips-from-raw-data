@@ -509,6 +509,14 @@ const P = DATA.points || [], E = DATA.edges || [], F = DATA.faces || [], IV = DA
 const GRID = (DATA.betti && DATA.betti.grid) || [0,1];
 const TABLE = (DATA.betti && DATA.betti.table) || [[0]];
 
+// Face birth values pre-sorted so "how many faces are active at eps" is O(log n).
+const F_EPS = F.map(f => f[3]).sort((a,b) => a-b);
+function countActiveFaces(e){
+  let lo = 0, hi = F_EPS.length;
+  while (lo < hi){ const m = (lo+hi)>>1; if (F_EPS[m] <= e) lo = m+1; else hi = m; }
+  return lo;
+}
+
 const N_L = DATA.n_layers || 0;
 const TRAJ = DATA.traj || [];
 const SPREAD = DATA.spread || [];
@@ -518,6 +526,9 @@ const GROUP = DATA.group_of || [];
 let rx = -0.45, ry = 0.7, eps = 0, t = 0, playing = false, raf = null, lastT = 0;
 let showPoints = true, showEdges = true, showFaces = true, shade = true;
 let fitR = 1.0;
+// Cached depth (painter's) order of the faces. It depends only on the view
+// (rx, ry), never on eps, so we recompute it only when the view rotates.
+let faceOrder = null, faceOrderKey = "";
 
 const scene = document.getElementById("scene"), sctx = scene.getContext("2d");
 const bfun  = document.getElementById("bfun"),  bctx = bfun.getContext("2d");
@@ -632,15 +643,28 @@ function renderScene(){
   const proj = P.map(project);
   const scr = proj.map(q => toScreen(q, w, h));
 
-  if (showFaces){
-    const act = [];
-    for (const f of F){ if (f[3] <= eps) act.push(f); }
-    act.sort((a,b)=>{
-      const za=(proj[a[0]][2]+proj[a[1]][2]+proj[a[2]][2])/3;
-      const zb=(proj[b[0]][2]+proj[b[1]][2]+proj[b[2]][2])/3;
-      return za-zb;
-    });
-    for (const f of act){
+  if (showFaces && F.length){
+    // Painter's (back-to-front) order depends only on the view, not eps. Recompute
+    // it only when the view rotates; the rounded key throttles re-sorts during a
+    // drag. (Re-sorting all faces on every frame is what made this ultra-slow.)
+    const vkey = (Math.round(rx*50)) + "," + (Math.round(ry*50));
+    if (faceOrderKey !== vkey){
+      faceOrder = F.map((_, i) => i);
+      faceOrder.sort((a,b)=>{
+        const fa=F[a], fb=F[b];
+        const za=proj[fa[0]][2]+proj[fa[1]][2]+proj[fa[2]][2];
+        const zb=proj[fb[0]][2]+proj[fb[1]][2]+proj[fb[2]][2];
+        return za-zb;
+      });
+      faceOrderKey = vkey;
+    }
+    // With a dense mesh the per-face wireframe stroke doubles the draw cost and just
+    // reads as a solid surface, so drop it once many faces are active.
+    const doStroke = shade && countActiveFaces(eps) <= 8000;
+    sctx.lineWidth = 0.6;
+    for (const i of faceOrder){
+      const f = F[i];
+      if (f[3] > eps) continue;
       const base = colormap(f[3]/EMAX);
       const col = shade ? shadeColor(proj[f[0]],proj[f[1]],proj[f[2]],base,fitR) : base;
       sctx.beginPath();
@@ -650,7 +674,7 @@ function renderScene(){
       sctx.closePath();
       sctx.fillStyle = rgba(col, shade ? 0.6 : 0.16);
       sctx.fill();
-      if (shade){ sctx.strokeStyle = rgba(col, 0.85); sctx.lineWidth = 0.6; sctx.stroke(); }
+      if (doStroke){ sctx.strokeStyle = rgba(col, 0.85); sctx.stroke(); }
     }
   }
   if (showEdges){
