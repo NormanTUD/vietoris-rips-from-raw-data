@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -76,7 +76,8 @@ class Barcode:
         return out
 
 
-def persistent_homology(complex: FilteredComplex) -> Barcode:
+def persistent_homology(complex: FilteredComplex,
+                        progress_cb: Callable[[int, int], None] | None = None) -> Barcode:
     n = complex.n_simplices
     cols: list[set[int]] = []
     for j in range(n):
@@ -89,8 +90,11 @@ def persistent_homology(complex: FilteredComplex) -> Barcode:
     pivot_col: dict[int, int] = {}
     pairs: list[tuple[int, int]] = []
     births: set[int] = set()
+    step = max(1, n // 200)
     with debug.timing(f"persistent_homology n_simplices={n}"):
         for j in range(n):
+            if progress_cb is not None and (j % step == 0 or j == n - 1):
+                progress_cb(j, n)
             c = cols[j]
             while c:
                 i = max(c)

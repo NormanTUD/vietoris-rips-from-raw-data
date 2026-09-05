@@ -1,6 +1,6 @@
 # /// script
 # requires-python = ">=3.10"
-# dependencies = ["numpy>=1.26", "beartype>=0.18"]
+# dependencies = ["numpy>=1.26", "beartype>=0.18", "rich>=13"]
 # ///
 """Build a self-contained interactive HTML/JS file for exploring TDA.
 
@@ -46,11 +46,17 @@ import time
 from pathlib import Path
 
 ROOT = str(Path(__file__).resolve().parents[1])
-if ROOT not in sys.path:
-    sys.path.insert(0, ROOT)
+TOOLS = str(Path(__file__).resolve().parent)
+for _p in (ROOT, TOOLS):
+    if _p not in sys.path:
+        sys.path.insert(0, _p)
 
 import numpy as np
 
+from rich.console import Console
+from rich.progress import Progress
+
+import _rich_ui
 from vrtda import PointSet, pairwise_distances
 from vrtda.complexes import FilteredComplex, build_rips, make_torus_grid_complex
 from vrtda.errors import TooLargeError
@@ -202,12 +208,31 @@ def build_source(args: argparse.Namespace) -> tuple[FilteredComplex, np.ndarray,
         pts = _torus_surface(nu, nu)
         return C, pts, "torus-grid surface (exact T^2 cell complex)", [1, 2, 1], int(C.max_dim())
 
+    if args.shape == "donut":
+        # Real Vietoris-Rips on a bagel, with the slider spanning the FULL range
+        # eps 0 -> max pairwise distance. Building the whole 2-skeleton is fine, but
+        # its persistent homology is pure-Python and slow, so cap the grid at a size
+        # whose full-range build is feasible (10x10 ~ a few tens of seconds; 16x16 is
+        # minutes). At max distance the bagel over-fills (the holes get triangulated
+        # away -> beta_1 drops, beta_2 blows up); the clean torus (beta_1 = 2) shows
+        # at an intermediate epsilon on the way up.
+        nper = min(args.nper, 10)
+        if nper != args.nper:
+            print(f"[donut] full-range Rips homology is slow; capping grid "
+                  f"{args.nper}x{args.nper} -> {nper}x{nper}", file=sys.stderr)
+        X = G.donut_grid(nper, nper)
+        D = pairwise_distances(X, args.metric)
+        eps_max = float(D.max())  # max pairwise distance -> slider 0 .. Dmax
+        max_dim = 2  # edges + triangles (the bagel surface); skip slow tetrahedra
+        with _rich_ui.timed(Console(), "Building Rips bagel (full range 0 -> max distance)"):
+            C = _build_rips_safe(X, D, eps_max, max_dim)
+        pts, proj = _to3d(X, "rips")
+        return C, pts, proj, [1, 2, 1], 2
+
     # Rips-based synthetic sources: each has a known intrinsic dimension k, and (for the
     # clean samplings) a known target Betti vector.
     if args.shape == "circle":
         X = G.circle_grid(args.n, radius=1.0); k = 1; target = [1, 1]
-    elif args.shape == "donut":
-        X = G.donut_grid(args.nper, args.nper); k = 2; target = None
     elif args.shape == "product":
         X = G.product_torus_grid(args.k, args.nper); k = int(args.k)
         target = _torus_betti(k) if k <= 2 else None
@@ -247,7 +272,19 @@ def _round_list(x: list[float], nd: int = 5) -> list[float]:
 
 def build_payload(args: argparse.Namespace) -> dict[str, object]:
     C, pts, proj, target, report_dim = build_source(args)
-    bc = persistent_homology(C)
+    # Persistent homology is pure-Python and slow on large complexes (e.g. the
+    # full-range Rips bagel). Show a transient progress bar when it will take a while.
+    n_simp = C.n_simplices
+    if n_simp > 30000:
+        with Progress(transient=True) as progress:
+            task = progress.add_task("persistent homology", total=n_simp)
+
+            def _cb(j: int, n: int) -> None:
+                progress.update(task, completed=j)
+
+            bc = persistent_homology(C, progress_cb=_cb)
+    else:
+        bc = persistent_homology(C)
     eps_max = float(C.values.max())
     n_grid = args.n_grid
     grid = np.linspace(0.0, eps_max, n_grid)
@@ -911,6 +948,9 @@ def main() -> int:
     p.add_argument("--out", default="interactive.html", help="output HTML file")
     args = p.parse_args()
 
+    console = Console()
+    _rich_ui.params_table(p, args, console)
+
     t0 = time.time()
     if args.layers is not None:
         data = build_layer_trajectory(args)
@@ -921,10 +961,12 @@ def main() -> int:
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(html, encoding="utf-8")
     if data["mode"] == "trajectory":
-        print(f"wrote {out}  (trajectory: {data['n_tokens']} tokens x {data['n_layers']} layers)")
+        console.print(f"[bold green]wrote[/bold green] {out}  "
+                      f"(trajectory: {data['n_tokens']} tokens x {data['n_layers']} layers)")
     else:
-        print(f"wrote {out}  ({len(data['points'])} points, {len(data['edges'])} edges, {len(data['faces'])} faces)")
-    print(f"   open it in a browser:  file://{out.resolve()}   [{time.time()-t0:.1f}s]")
+        console.print(f"[bold green]wrote[/bold green] {out}  "
+                      f"({len(data['points'])} points, {len(data['edges'])} edges, {len(data['faces'])} faces)")
+    console.print(f"[dim]open it in a browser:  file://{out.resolve()}   [{time.time()-t0:.1f}s][/dim]")
     return 0
 
 

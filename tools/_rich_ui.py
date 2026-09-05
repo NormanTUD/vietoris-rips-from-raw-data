@@ -61,3 +61,8 @@ class timed:
         dt = time.time() - self._t0
         if exc_type is None:
             self.console.print(f"[dim]{self.message} … {dt:.1f}s[/dim]")
+
+
+from vrtda.beartype_guard import beartype_module as _beartype_module
+
+_beartype_module(__name__)
