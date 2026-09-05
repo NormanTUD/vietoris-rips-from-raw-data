@@ -418,6 +418,7 @@ _DYNAMICS_FIXED: tuple[tuple[tuple[int, ...], str], ...] = (
     ((1, 1), "a limit-cycle / periodic attractor (homotopy type of S¹ — one period)"),
     ((1, 0, 1), "a closed energy-shell state space S² (a stable core it circles)"),
     ((1, 0, 0, 1), "a 3D state space closed on itself (S³ or lens-type)"),
+    ((1, 0, 0, 0, 1), "a 4D state space closed on itself (S⁴ or lens-type)"),
     ((1, 2, 1), "a quasi-periodic 2-torus attractor (two incommensurable frequencies)"),
     ((1, 3, 3, 1), "a quasi-periodic 3-torus (rare — usually on the route to chaos, Ruelle–Takens)"),
     ((1, 4, 6, 4, 1), "a quasi-periodic 4-torus attractor (four incommensurable frequencies)"),
@@ -501,7 +502,7 @@ _DYNAMICS_REFS: tuple[tuple[str, list[int]], ...] = (
     ("2-torus T² attractor", [1, 2, 1]), ("3-torus T³ attractor", [1, 3, 3, 1]),
     ("4-torus T⁴ attractor", [1, 4, 6, 4, 1]),
     ("Lorenz/Chua attractor", [1, 2, 0]), ("Rössler-type attractor", [1, 1, 0]),
-    ("sphere S²", [1, 0, 1]), ("sphere S³", [1, 0, 0, 1]), ("ℂP² state space", [1, 0, 1, 0, 1]),
+    ("sphere S²", [1, 0, 1]), ("sphere S³", [1, 0, 0, 1]), ("sphere S⁴", [1, 0, 0, 0, 1]), ("ℂP² state space", [1, 0, 1, 0, 1]),
     ("basin network", [1, 4, 0]), ("basin islands", [1, 2, 0]),
 )
 
