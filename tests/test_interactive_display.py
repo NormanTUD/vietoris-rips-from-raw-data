@@ -27,7 +27,7 @@ from vrtda.beartype_guard import beartype_module
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def _load_tool() -> "importlib.util.module":
+def _load_tool() -> object:
     spec = importlib.util.spec_from_file_location("vrtda_interactive", ROOT / "tools" / "interactive.py")
     mod = importlib.util.module_from_spec(spec)
     sys.modules["vrtda_interactive"] = mod
