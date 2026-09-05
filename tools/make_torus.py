@@ -84,13 +84,33 @@ def _rips_betti(X: np.ndarray, max_dim: int) -> list[int]:
     return persistent_homology(C).betti_at(eps)
 
 
-def verify(kind: str, k: int, cloud: np.ndarray) -> None:
+def _feature_radius(kind: str, radius: float, minor: float) -> float:
+    """Shape feature size that, blurred by this much noise, makes the shape
+    unrecognizable: the tube radius for the bagel, the circle/sphere radius otherwise."""
+    return minor if kind == "donut" else radius
+
+
+def _apply_randomizer(data: np.ndarray, args: argparse.Namespace) -> np.ndarray:
+    """Jitter the cloud. randomizer=0 -> exact; randomizer=1 -> noise std = one
+    feature radius (scrambled); in between -> proportional jitter."""
+    if args.randomizer <= 0.0:
+        return data
+    std = args.randomizer * _feature_radius(args.kind, args.radius, args.minor)
+    rng = np.random.default_rng(args.seed)
+    return data + rng.normal(0.0, std, data.shape)
+
+
+def verify(kind: str, k: int, cloud: np.ndarray, randomizer: float = 0.0) -> None:
     expected, label = _expected_betti(kind, k)
     print(f"verify: {label} expected beta = {expected}")
     exact = _exact_betti(kind, k)
     print(f"  exact complex beta = {exact}")
     assert exact == expected, f"exact complex beta {exact} != expected {expected}"
-    # Rips on the actual cloud is complete and clean only for 1-D and 2-D shapes.
+    if randomizer > 0.0:
+        print("  (rips-on-cloud skipped: the cloud is jittered via --randomizer, so clean recovery is not guaranteed)")
+        print(f"  OK: {label} topology verified (exact complex)")
+        return
+    # Rips on the actual (clean) cloud is complete and clean only for 1-D and 2-D shapes.
     if kind == "circle":
         rb = _rips_betti(cloud, max_dim=2)
         print(f"  rips-on-cloud beta = {rb}")
@@ -113,13 +133,18 @@ def main() -> int:
     p.add_argument("--radius", type=float, default=1.0)
     p.add_argument("--minor", type=float, default=0.35, help="donut minor radius")
     p.add_argument("--grid", action="store_true", help="use deterministic grid sampling")
+    p.add_argument("--randomizer", type=float, default=0.0,
+                   help="jitter in [0,1]: 0=exact, ~0.2=slightly jittered, 1=scrambled/unrecognizable")
     p.add_argument("--noise", type=float, default=0.0)
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--verify", action="store_true", help="check ground-truth Betti numbers")
     p.add_argument("--out", required=True, help="output CSV path")
     args = p.parse_args()
 
-    data = build(args)
+    if not (0.0 <= args.randomizer <= 1.0):
+        raise SystemExit("--randomizer must be in [0, 1]")
+
+    data = _apply_randomizer(build(args), args)
     ps = PointSet(data, name=args.kind)
     ps.to_csv(args.out)
     print(f"wrote {args.out}: n={ps.n} dim={ps.dim}")
@@ -127,7 +152,7 @@ def main() -> int:
     if args.verify:
         if args.kind == "product" and args.k >= 5:
             print("note: verifying k>=5 exact torus homology can take ~40s")
-        verify(args.kind, args.k, data)
+        verify(args.kind, args.k, data, args.randomizer)
     return 0
 
 

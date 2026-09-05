@@ -165,7 +165,8 @@ def test_sphere_shape_and_radius() -> None:
 # --------------------------------------------------------------------------- #
 def _ns(**kw: object) -> argparse.Namespace:
     base: dict[str, object] = dict(
-        kind="product", k=2, n=24, nper=8, radius=1.0, minor=0.35, grid=True, noise=0.0, seed=0
+        kind="product", k=2, n=24, nper=8, radius=1.0, minor=0.35, grid=True, noise=0.0,
+        seed=0, randomizer=0.0,
     )
     base.update(kw)
     return argparse.Namespace(**base)
@@ -198,6 +199,52 @@ def test_tool_make_wedge_build_and_verify() -> None:
     assert w.build(ns).shape == (48, 6)
     w.verify(3, 1, w.build(ns))  # asserts exact [1,3] and rips [1,3]
     w.verify(2, 2, None)         # asserts exact bouquet of 2 S^2 = [1,0,2]
+
+
+# --------------------------------------------------------------------------- #
+# --randomizer jitter (0=exact, 1=scrambled, in between=jitter)
+# --------------------------------------------------------------------------- #
+def test_randomizer_zero_is_exact() -> None:
+    t = _load_tool("make_torus")
+    base = t.build(_ns(kind="donut", n=12, nper=16))
+    assert np.array_equal(t._apply_randomizer(base, _ns(kind="donut", n=12, nper=16, randomizer=0.0)),
+                          G.donut_grid(12, 16, R=1.0, r=0.35))
+
+
+@pytest.mark.parametrize(
+    "tool,ns",
+    [
+        ("make_torus", dict(kind="donut", k=2, n=12, nper=16, radius=1.0, minor=0.35,
+                            grid=True, noise=0.0, seed=0, randomizer=0.0)),
+        ("make_sphere", dict(k=2, n=64, radius=1.0, noise=0.0, seed=0, randomizer=0.0)),
+        ("make_wedge", dict(n=3, k=1, nper=16, radius=1.0, seed=0, randomizer=0.0)),
+    ],
+)
+def test_randomizer_deterministic_and_monotonic(tool: str, ns: dict[str, object]) -> None:
+    m = _load_tool(tool)
+    base = m.build(argparse.Namespace(**ns))
+
+    def jitter(r: float) -> np.ndarray:
+        d = dict(ns)
+        d["randomizer"] = r
+        d["seed"] = 7
+        return m._apply_randomizer(base, argparse.Namespace(**d))
+
+    assert np.array_equal(jitter(0.3), jitter(0.3))  # deterministic for a fixed seed
+    d0 = float(np.linalg.norm(jitter(0.0) - base, axis=1).mean())
+    d1 = float(np.linalg.norm(jitter(0.4) - base, axis=1).mean())
+    d2 = float(np.linalg.norm(jitter(0.9) - base, axis=1).mean())
+    assert d0 < d1 < d2  # displacement grows with the randomizer
+
+
+def test_randomizer_rejects_out_of_range(monkeypatch: object) -> None:
+    t = _load_tool("make_torus")
+    monkeypatch.setattr(
+        sys, "argv",
+        ["make_torus.py", "--kind", "donut", "--grid", "--randomizer", "1.5", "--out", "/tmp/opencode/_rand.csv"],
+    )
+    with pytest.raises(SystemExit):
+        t.main()
 
 
 beartype_module(__name__)

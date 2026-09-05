@@ -45,13 +45,26 @@ def _rips_betti(X: np.ndarray, max_dim: int) -> list[int]:
     return persistent_homology(C).betti_at(eps)
 
 
-def verify(k: int, cloud: np.ndarray) -> None:
+def _apply_randomizer(data: np.ndarray, args: argparse.Namespace) -> np.ndarray:
+    """Jitter the cloud. randomizer=0 -> exact; randomizer=1 -> noise std = the sphere
+    radius (scrambled into a ball); in between -> proportional jitter."""
+    if args.randomizer <= 0.0:
+        return data
+    rng = np.random.default_rng(args.seed)
+    return data + rng.normal(0.0, args.randomizer * args.radius, data.shape)
+
+
+def verify(k: int, cloud: np.ndarray, randomizer: float = 0.0) -> None:
     expected = _expected_betti(k)
     print(f"verify: S^{k} expected beta = {expected}")
     C = make_simplicial_sphere(k)
     exact = betti_at(C, float(C.values.max()))
     print(f"  exact complex beta = {exact}")
     assert exact == expected, f"exact complex beta {exact} != expected {expected}"
+    if randomizer > 0.0:
+        print("  (rips-on-cloud skipped: the cloud is jittered via --randomizer)")
+        print(f"  OK: S^{k} topology verified (exact complex)")
+        return
     if k == 1:
         rb = _rips_betti(cloud, max_dim=2)
         print(f"  rips-on-cloud beta = {rb}")
@@ -66,18 +79,23 @@ def main() -> int:
     p.add_argument("--k", type=int, default=2, help="sphere dimension (S^k embedded in R^{k+1})")
     p.add_argument("--n", type=int, default=256, help="number of points on the sphere")
     p.add_argument("--radius", type=float, default=1.0)
+    p.add_argument("--randomizer", type=float, default=0.0,
+                   help="jitter in [0,1]: 0=exact, ~0.2=slightly jittered, 1=scrambled/unrecognizable")
     p.add_argument("--noise", type=float, default=0.0)
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--verify", action="store_true", help="check ground-truth Betti numbers")
     p.add_argument("--out", required=True, help="output CSV path")
     args = p.parse_args()
 
-    data = build(args)
+    if not (0.0 <= args.randomizer <= 1.0):
+        raise SystemExit("--randomizer must be in [0, 1]")
+
+    data = _apply_randomizer(build(args), args)
     ps = PointSet(data, name="sphere")
     ps.to_csv(args.out)
     print(f"wrote {args.out}: n={ps.n} dim={ps.dim}")
     if args.verify:
-        verify(args.k, data)
+        verify(args.k, data, args.randomizer)
     return 0
 
 
