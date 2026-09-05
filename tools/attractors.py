@@ -13,16 +13,20 @@ import sys
 from pathlib import Path
 
 ROOT = str(Path(__file__).resolve().parents[1])
-if ROOT not in sys.path:
-    sys.path.insert(0, ROOT)
+TOOLS = str(Path(__file__).resolve().parent)
+for _p in (ROOT, TOOLS):
+    if _p not in sys.path:
+        sys.path.insert(0, _p)
 
 import numpy as np
 
+from rich.console import Console
+
+import _rich_ui
 from vrtda import (
     PointSet,
     pairwise_distances,
     build_rips,
-    persistent_homology,
     datasets,
     attractors,
 )
@@ -35,12 +39,13 @@ def _nn_mean(D: np.ndarray) -> float:
     return float(d.min(1).mean())
 
 
-def _barcode_for(pts: np.ndarray, metric: str, max_dim: int, frac: float) -> tuple[Barcode, float, int]:
+def _barcode_for(pts: np.ndarray, metric: str, max_dim: int, frac: float,
+                 console: Console) -> tuple[Barcode, float, int]:
     D = pairwise_distances(pts, metric)
     nn = _nn_mean(D)
     eps_max = frac * nn
     C = build_rips(pts, D, eps_max, max_dim=max_dim)
-    return persistent_homology(C), eps_max, C.n_simplices
+    return _rich_ui.homology_progress(C, console), eps_max, C.n_simplices
 
 
 def collect_clouds(args: argparse.Namespace) -> dict[str, np.ndarray]:
@@ -74,19 +79,24 @@ def main() -> int:
     p.add_argument("--out", default=None, help="output CSV report")
     args = p.parse_args()
 
+    console = Console()
+    _rich_ui.params_table(p, args, console)
+
     clouds = collect_clouds(args)
     if not clouds:
         raise SystemExit("nothing to compare: give --layers and/or --csvs and/or --source")
 
     rows = []
-    for name, pts in clouds.items():
-        bc, eps_max, nsimp = _barcode_for(pts, args.metric, args.max_dim, args.frac)
-        row = {"name": name, "n": pts.shape[0], "dim": pts.shape[1], "nsimp": nsimp, "eps_max": eps_max}
-        for d, v in attractors.per_dim_summary(bc, eps_max, args.min_fraction).items():
-            row[f"b{d}_essential"] = v["essential"]
-            row[f"b{d}_long_lived"] = v["long_lived"]
-            row[f"b{d}_persist"] = v["total_persistence"]
-        rows.append(row)
+    with _rich_ui.progress(console, "clouds", total=len(clouds)) as advance:
+        for name, pts in clouds.items():
+            bc, eps_max, nsimp = _barcode_for(pts, args.metric, args.max_dim, args.frac, console)
+            row = {"name": name, "n": pts.shape[0], "dim": pts.shape[1], "nsimp": nsimp, "eps_max": eps_max}
+            for d, v in attractors.per_dim_summary(bc, eps_max, args.min_fraction).items():
+                row[f"b{d}_essential"] = v["essential"]
+                row[f"b{d}_long_lived"] = v["long_lived"]
+                row[f"b{d}_persist"] = v["total_persistence"]
+            rows.append(row)
+            advance()
 
     # column order: fixed leading cols, then per-dim blocks
     md = args.max_dim
