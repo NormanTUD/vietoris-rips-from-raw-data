@@ -2,9 +2,18 @@
 # requires-python = ">=3.10"
 # dependencies = ["numpy>=1.26", "beartype>=0.18"]
 # ///
-"""Generate a ground-truth point cloud CSV for TDA validation."""
+"""Generate a ground-truth point cloud CSV for TDA validation.
+
+Supports n-tori (k = 2, 3, 4, 5, ...) via `--kind product --k K` (a grid of
+points on T^k embedded in R^{2k}), a 1-torus (`circle`), a 3-D bagel (`donut`),
+and a random S^k point cloud (`sphere`). With `--verify` the ground-truth
+topology (Betti numbers) is checked against the exact cell complex for that
+shape, and -- for the low-dimensional cases where a Vietoris-Rips complex on the
+actual cloud recovers it cleanly -- against the cloud itself.
+"""
 import argparse
 import sys
+from math import comb
 from pathlib import Path
 
 ROOT = str(Path(__file__).resolve().parents[1])
@@ -14,6 +23,8 @@ if ROOT not in sys.path:
 import numpy as np
 
 from vrtda import PointSet, generators as G
+from vrtda import pairwise_distances, build_rips, persistent_homology, betti_at
+from vrtda.complexes import make_torus_grid_complex, make_simplicial_sphere
 from vrtda.beartype_guard import beartype_module
 
 
@@ -35,10 +46,68 @@ def build(args: argparse.Namespace) -> np.ndarray:
     raise SystemExit(f"unknown kind {args.kind!r}")
 
 
+def _expected_betti(kind: str, k: int) -> tuple[list[int], str]:
+    if kind == "circle":
+        return [1, 1], "S^1 (1-torus)"
+    if kind == "product":
+        return [comb(k, d) for d in range(k + 1)], f"T^{k}"
+    if kind == "donut":
+        return [1, 2, 1], "T^2 (bagel)"
+    if kind == "sphere":
+        b = [0] * (k + 1)
+        b[0] = 1
+        b[k] = 1
+        return b, f"S^{k}"
+    raise SystemExit(f"unknown kind {kind!r}")
+
+
+def _exact_betti(kind: str, k: int) -> list[int]:
+    if kind == "circle":
+        C = make_simplicial_sphere(1)
+    elif kind == "product":
+        C = make_torus_grid_complex(k, (3,) * k)
+    elif kind == "donut":
+        C = make_torus_grid_complex(2, (3, 3))
+    elif kind == "sphere":
+        C = make_simplicial_sphere(k)
+    else:
+        raise SystemExit(f"unknown kind {kind!r}")
+    return betti_at(C, float(C.values.max()))
+
+
+def _rips_betti(X: np.ndarray, max_dim: int) -> list[int]:
+    D = pairwise_distances(X)
+    d = D.copy()
+    np.fill_diagonal(d, np.inf)
+    eps = 1.6 * float(d.min(axis=1).mean())
+    C = build_rips(X, D, eps, max_dim=max_dim)
+    return persistent_homology(C).betti_at(eps)
+
+
+def verify(kind: str, k: int, cloud: np.ndarray) -> None:
+    expected, label = _expected_betti(kind, k)
+    print(f"verify: {label} expected beta = {expected}")
+    exact = _exact_betti(kind, k)
+    print(f"  exact complex beta = {exact}")
+    assert exact == expected, f"exact complex beta {exact} != expected {expected}"
+    # Rips on the actual cloud is complete and clean only for 1-D and 2-D shapes.
+    if kind == "circle":
+        rb = _rips_betti(cloud, max_dim=2)
+        print(f"  rips-on-cloud beta = {rb}")
+        assert (list(rb) + [0])[:2] == [1, 1], f"rips beta {rb} != [1,1]"
+    elif kind == "product" and k <= 2:
+        rb = _rips_betti(cloud, max_dim=k + 1)
+        print(f"  rips-on-cloud beta = {rb}")
+        assert (list(rb) + [0, 0])[: len(expected)] == expected, f"rips beta {rb} != {expected}"
+    else:
+        print("  (rips-on-cloud not checked: the Rips complex hits the combinatorial wall for k>=3 / donut / sphere)")
+    print(f"  OK: {label} topology verified")
+
+
 def main() -> int:
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--kind", choices=["circle", "product", "donut", "sphere"], required=True)
-    p.add_argument("--k", type=int, default=2, help="ambient torus dimension (product/sphere)")
+    p.add_argument("--k", type=int, default=2, help="torus dimension (product) / sphere dimension (sphere)")
     p.add_argument("--n", type=int, default=24, help="points (or nu for grids)")
     p.add_argument("--nper", type=int, default=8, help="points per circle (grid) / nv (donut)")
     p.add_argument("--radius", type=float, default=1.0)
@@ -46,6 +115,7 @@ def main() -> int:
     p.add_argument("--grid", action="store_true", help="use deterministic grid sampling")
     p.add_argument("--noise", type=float, default=0.0)
     p.add_argument("--seed", type=int, default=0)
+    p.add_argument("--verify", action="store_true", help="check ground-truth Betti numbers")
     p.add_argument("--out", required=True, help="output CSV path")
     args = p.parse_args()
 
@@ -53,6 +123,11 @@ def main() -> int:
     ps = PointSet(data, name=args.kind)
     ps.to_csv(args.out)
     print(f"wrote {args.out}: n={ps.n} dim={ps.dim}")
+
+    if args.verify:
+        if args.kind == "product" and args.k >= 5:
+            print("note: verifying k>=5 exact torus homology can take ~40s")
+        verify(args.kind, args.k, data)
     return 0
 
 
