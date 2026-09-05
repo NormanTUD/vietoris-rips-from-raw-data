@@ -265,25 +265,39 @@ uv run tools/interactive.py --shape donut-rips --nper 8 --out donut-rips.html
 >    triangles form at a larger ε than the inner surface, and the slider is capped below that.
 >
 > **Mitigations / safeguards (kept in sync across the codebase):**
-> 1. **To *see* a clean, complete torus**, use `--shape donut` (exact T² cell complex) —
->    instant, β = [1,2,1], slider runs to the full surface. *This is the reliable path.*
-> 2. **To watch Rips** on a bagel, use `--shape donut-rips` (capped at `nper ≤ 8`).
-> 3. **`--points` auto-raises the slider** past the connectivity ε up to the largest
->    *feasible* ε (so the view is as complete as the browser/homology can handle) and prints
->    a yellow **over-filling NOTE** (triangles/vertex ≫ 1.5).
-> 4. **`--eps-max <v>`** lets you push the slider higher toward the surface-completion scale;
+> 1. **`--points` auto-detects a regular torus grid and rebuilds the exact T²** — if your
+>    CSV is a clean `make_torus --grid` bagel (evenly-spaced major × tube angles), it is
+>    reconstructed as the exact T² cell complex → **a clean torus, β = [1,2,1]**, with a
+>    complete 3D view (edges drawn between truly adjacent points). This is the *most
+>    reliable* path for a grid CSV. **`--no-exact-torus`** forces the honest Rips instead.
+> 2. **To *see* a clean, complete torus**, use `--shape donut` (exact T² cell complex) —
+>    instant, β = [1,2,1], slider runs to the full surface.
+> 3. **To watch Rips** on a bagel, use `--shape donut-rips` (capped at `nper ≤ 8`).
+> 4. **Non-grid clouds:** `--points` runs Rips over the **full ε range** (up to the pair
+>    distance) and auto-caps the slider at the largest *feasible* ε (so the view is as
+>    complete as the browser/homology can handle), printing a yellow **over-filling NOTE**
+>    (triangles/vertex ≫ 1.5) so you know the numbers are a Rips artifact.
+> 5. **`--eps-max <v>`** lets you push the slider higher toward the surface-completion scale;
 >    it is capped at the feasibility wall (reported, never a crash).
 >
 > ```bash
-> uv run tools/interactive.py --points bagel.csv --eps-max 0.28   # push toward the outer surface
+> # clean grid CSV  -> auto-rebuilt exact T^2 (clean torus, beta=[1,2,1])
+> uv run tools/interactive.py --points torus2.csv
+> # force the honest (over-filling) Rips on a detected grid:
+> uv run tools/interactive.py --points torus2.csv --no-exact-torus
+> # push a non-grid cloud's slider toward the outer surface (capped at feasibility):
+> uv run tools/interactive.py --points bagel.csv --eps-max 0.28
 > ```
 >
-> Code guards: the `IMPORTANT` block at the top of `tools/interactive.py`, `build_rips` in
-> `vrtda/complexes.py`, `betti_function` in `vrtda/persistence.py`, the generation-time
-> warning in `make_torus.py`, and the regression tests in
-> `tests/test_interactive_display.py` (`test_donut_rips_full_range_overfills`,
-> `test_points_dense_bagel_detects_and_auto_raises`, `test_max_feasible_eps_caps_at_wall`,
-> `test_overfill_note_message`, `test_make_torus_dense_donut_warns`).
+> Code guards: the `IMPORTANT` block at the top of `tools/interactive.py` (incl.
+> `_detect_torus_grid` / `_exact_torus2` with its runtime β=[1,2,1] assert and
+> `_max_feasible_eps`), `build_rips` in `vrtda/complexes.py`, `betti_function` in
+> `vrtda/persistence.py`, the generation-time warning in `make_torus.py`, and the
+> regression tests in `tests/test_interactive_display.py`
+> (`test_detect_torus_grid_clean`, `test_points_clean_grid_reconstructs_torus`,
+> `test_points_no_exact_torus_forces_rips`, `test_points_dense_bagel_capped_at_feasible`,
+> `test_max_feasible_eps_sparse_reaches_dmax`, `test_overfill_note_message`,
+> `test_make_torus_dense_donut_warns`).
 
 ### `methods.py` — the selectable attractor-method suite  ⭐
 

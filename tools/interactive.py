@@ -80,15 +80,25 @@ from vrtda.beartype_guard import beartype_module
 #   per vertex than a clean triangulation (~1.5), so its 2-skeleton fills
 #   the 2-cycles (the torus void) and shreds beta_1 into many short loops.
 #   This is a property of Rips on dense point clouds, NOT a code bug.
-# MITIGATION (three layers, keep them in sync):
-#   (a) To SEE a clean torus, use `--shape donut` -> the exact T^2 cell
-#       complex (fast, reads exactly [1, 2, 1]); see _exact_torus2 below.
-#   (b) `--shape donut-rips` (honest full-range Rips) is capped at
-#       nper <= 8 so a feasible epsilon exists.
-#   (c) The `--points` path below prints _rich_ui.overfill_note() when it
-#       detects over-filling (faces > _OVERFILL_FACE_RATIO * vertices).
+# MITIGATION (four layers, keep them in sync):
+#   (a) `--points` AUTO-DETECTS a regular torus grid (evenly-spaced major x tube
+#       angles, see _detect_torus_grid) and rebuilds the EXACT T^2 cell complex
+#       (_exact_torus2) -> a clean torus, beta=[1,2,1], with a complete 3D view.
+#       This is the reliable path for a clean `make_torus --grid` CSV. Use
+#       `--no-exact-torus` to force the honest (over-filling) Rips instead.
+#   (b) To SEE a clean torus without a CSV, use `--shape donut` -> the exact T^2
+#       cell complex (fast, reads exactly [1, 2, 1]); see _exact_torus2 below.
+#   (c) `--shape donut-rips` (honest full-range Rips) is capped at nper <= 8 so a
+#       feasible epsilon exists.
+#   (d) For a NON-grid dense cloud, `--points` runs Rips over the full pair-distance
+#       range, auto-caps the slider at the largest feasible epsilon (_max_feasible_eps),
+#       and prints _rich_ui.overfill_note() when it detects over-filling
+#       (faces > _OVERFILL_FACE_RATIO * vertices), so you know the numbers are a
+#       Rips artifact, not the true topology.
 # Regression guard: tests/test_interactive_display.py::
-#   test_donut_rips_full_range_overfills.
+#   test_donut_rips_full_range_overfills, test_detect_torus_grid_clean,
+#   test_points_clean_grid_reconstructs_torus, test_points_no_exact_torus_forces_rips,
+#   test_points_dense_bagel_capped_at_feasible.
 # =====================================================================
 # faces/vertex above which we flag a dense cloud as over-filling (a clean
 # 2-manifold triangulation has ~1.5; over-filled Rips reaches tens).
@@ -176,24 +186,24 @@ _FEASIBLE_MAX_BUDGET: int = 160_000
 
 
 def _max_feasible_eps(X: np.ndarray, D: np.ndarray, eps_hi: float,
-                      budget: int, lo: float = 0.0, iters: int = 11) -> float:
+                      budget: int, lo: float = 0.0, iters: int = 6) -> float:
     """SAFEGUARD (feasibility): the largest eps in [lo, eps_hi] at which build_rips
     (max_dim=2) keeps <= budget simplices. The simplex count is monotone non-decreasing
-    in eps, so a binary search finds it cheaply. This lets the --points slider span the
-    FULL max-pairwise-distance (Dmax) when that is feasible, and caps at the largest
-    feasible epsilon when Dmax would blow the browser / pure-Python homology (reported,
-    never a crash)."""
+    in eps, so a binary search finds it. Each probe is capped at `budget` simplices
+    (max_simplices=budget) so an infeasible eps fails fast instead of building toward the
+    2M hard cap. This lets the --points slider span the FULL max-pairwise-distance (Dmax)
+    when feasible, and cap at the largest feasible epsilon otherwise (reported, no crash)."""
     lo = float(lo)
     hi = float(eps_hi)
     try:
-        if build_rips(X, D, hi, max_dim=2).n_simplices <= budget:
+        if build_rips(X, D, hi, max_dim=2, max_simplices=budget).n_simplices <= budget:
             return hi  # the full range up to Dmax is feasible
     except TooLargeError:
         pass
     for _ in range(iters):
         mid = 0.5 * (lo + hi)
         try:
-            feasible = build_rips(X, D, mid, max_dim=2).n_simplices <= budget
+            feasible = build_rips(X, D, mid, max_dim=2, max_simplices=budget).n_simplices <= budget
         except TooLargeError:
             feasible = False
         if feasible:
@@ -237,15 +247,20 @@ def _torus_betti(k: int) -> list[int]:
     return [int(comb(k, d)) for d in range(k + 1)]
 
 
-def _exact_torus2(nu: int, kind: str, label: str) -> tuple[FilteredComplex, np.ndarray, str, list[int], int]:
+def _exact_torus2(nu: int, nv: int, kind: str, label: str,
+                  R: float = 1.0, r: float = 0.35) -> tuple[FilteredComplex, np.ndarray, str, list[int], int]:
     """The exact T^2 cell complex with a positional filtration (vertices, then edges,
     then faces), displayed as a bagel surface. Clean beta = [1, 2, 1] and instant --
-    unlike a Rips bagel, which over-fills and never reads a clean beta_1 = 2."""
-    C0 = make_torus_grid_complex(2, (nu, nu))
+    unlike a Rips bagel, which over-fills and never reads a clean beta_1 = 2.
+
+    Vertex index = i + j*nu (i in [0,nu) major, j in [0,nv) tube), which matches
+    generators.donut_grid(nu, nv) and _torus_surface(nu, nv, R, r) exactly, so a CSV of
+    a donut_grid pairs 1:1 with this complex's vertices."""
+    C0 = make_torus_grid_complex(2, (nu, nv))
     simps = list(C0.simplexes)
 
     def i_of(j: int) -> int:
-        return j % nu
+        return j % nu  # major index (drives the positional filtration phase)
 
     vals: list[float] = []
     for s in simps:
@@ -260,19 +275,62 @@ def _exact_torus2(nu: int, kind: str, label: str) -> tuple[FilteredComplex, np.n
             vals.append(2.0 + 0.8 * ph)
     C = FilteredComplex(
         simps, np.array(vals, dtype=np.float64),
-        np.array([len(s) - 1 for s in simps], dtype=np.int64), kind, {"nu": nu, "nv": nu},
+        np.array([len(s) - 1 for s in simps], dtype=np.int64), kind, {"nu": nu, "nv": nv},
     )
-    pts = _torus_surface(nu, nu)
+    pts = _torus_surface(nu, nv, R, r)
     # SAFEGUARD (runtime, reliability): the exact T^2 complex MUST read [1, 2, 1] at the
     # top of the slider. If a refactor ever changes this, fail loudly instead of
     # silently showing a wrong torus. The exact complex is small, so this check is cheap.
     got = persistent_homology(C).betti_at(float(C.values.max()))[:3]
     if got != [1, 2, 1]:
         raise VrtdaError(
-            f"internal error: exact T^2 complex (nu={nu}, kind={kind!r}) read beta={got}, "
+            f"internal error: exact T^2 complex (nu={nu}, nv={nv}, kind={kind!r}) read beta={got}, "
             f"expected [1, 2, 1] -- the reliable clean-torus path has regressed."
         )
     return C, pts, label, [1, 2, 1], int(C.max_dim())
+
+
+def _even_grid_count(angles: np.ndarray, max_count: int = 512) -> int | None:
+    """If `angles` sit on a regular cyclic grid of `cnt` evenly-spaced lines (each line
+    possibly holding several points), return the FINEST such cnt (searched high->low);
+    else None. This is how a torus-grid's major/tube index count is recovered."""
+    n = len(angles)
+    for cnt in range(min(max_count, n), 1, -1):
+        if n % cnt:
+            continue
+        width = 2.0 * np.pi / cnt
+        line = np.round((angles % (2.0 * np.pi)) / width).astype(np.int64) % cnt
+        per_bin = np.bincount(line, minlength=cnt)
+        if per_bin.min() != n // cnt:      # uneven occupancy -> not a regular grid
+            continue
+        res = np.abs(angles - line * width)
+        res = np.minimum(res, 2.0 * np.pi - res)
+        if res.max() < 0.45 * width:       # every point close to a grid line
+            return cnt
+    return None
+
+
+def _detect_torus_grid(X: np.ndarray, max_count: int = 512) -> tuple[int, int, float, float] | None:
+    """Detect whether X is a regular grid on a torus (bagel) surface. Returns
+    (nu, nv, R, r) or None. A donut_grid(nu, nv, R, r) has nu evenly-spaced major angles
+    (u=atan2(y,x)) and nv evenly-spaced tube angles (v=atan2(z, rho-R)), with
+    rho=sqrt(x^2+y^2) in [R-r, R+r] and n = nu*nv. Used to reconstruct the EXACT T^2
+    complex from such a CSV (a clean torus) instead of Rips (which over-fills)."""
+    n = X.shape[0]
+    if n < 16 or X.shape[1] < 3 or not np.isfinite(X).all():
+        return None
+    u = np.arctan2(X[:, 1], X[:, 0])
+    rho = np.hypot(X[:, 0], X[:, 1])
+    R = 0.5 * (float(rho.max()) + float(rho.min()))
+    r = 0.5 * (float(rho.max()) - float(rho.min()))
+    if r <= 1e-6 or R <= 1e-6 or r >= R:      # r>=R is not a bagel (no hole)
+        return None
+    v = np.arctan2(X[:, 2], rho - R)
+    nu = _even_grid_count(u, max_count)
+    nv = _even_grid_count(v, max_count)
+    if nu is None or nv is None or nu * nv != n:
+        return None
+    return int(nu), int(nv), float(R), float(r)
 
 
 def build_source(args: argparse.Namespace) -> tuple[FilteredComplex, np.ndarray, str, list[int] | None, int]:
@@ -286,18 +344,30 @@ def build_source(args: argparse.Namespace) -> tuple[FilteredComplex, np.ndarray,
     tests/test_betti_shapes.py.
     """
     if args.points is not None:
-        # Arbitrary point cloud (any ambient dim; PCA-projected if > 3D). The intrinsic
-        # dim is unknown, so default to max_dim=3 (guarantees clean H0..H2) and report
-        # beta_0..beta_2; raise --max-dim for genuinely higher-dimensional shapes.
-        #
-        # IMPORTANT: a DENSE point cloud (e.g. a 1536-point bagel) makes Vietoris-Rips
-        # over-fill the higher dimensions -- beta_2 explodes and beta_1 shreds into the
-        # grid's short loops (see the note block at the top of this file). We detect it
-        # below (faces/vertex > _OVERFILL_FACE_RATIO) and print overfill_note so the
-        # (artifact) Betti numbers are not mistaken for the true topology.
+        # The point-cloud path. Two sub-cases:
+        #  (1) The cloud is a regular grid on a torus surface (a donut_grid, e.g. from
+        #      `make_torus --kind donut --grid`). We RECONSTRUCT THE EXACT T^2 CELL
+        #      COMPLEX from it -> a clean torus (beta=[1,2,1]). This is the reliable
+        #      answer to "load my bagel, show me a torus". Rips on such a grid over-fills
+        #      and never reads beta_1=2 (see the IMPORTANT block above), so the exact
+        #      complex is what actually makes it a torus.
+        #  (2) Any other cloud: plain Vietoris-Rips over the full Dmax range.
         X = PointSet.from_csv(args.points, value_cols=args.value_cols, index_cols=args.index_cols).data
-        D = pairwise_distances(X, args.metric)
         console = Console()
+        if not getattr(args, "no_exact_torus", False):
+            grid = _detect_torus_grid(X)
+            if grid is not None:
+                nu, nv, R, r = grid
+                console.print(f"[cyan]NOTE: detected a {nu}x{nv} torus grid in {args.points}; "
+                              f"using the EXACT T^2 cell complex (a clean torus, beta=[1,2,1]) "
+                              f"instead of Rips (which over-fills a dense bagel). "
+                              f"Use --no-exact-torus to force Rips.[/cyan]")
+                C, pts, _label, target, rd = _exact_torus2(nu, nv, "donut",
+                                                           "torus grid (exact T^2 reconstructed from your CSV)", R, r)
+                return C, pts, "exact T^2 (reconstructed)", target, rd
+
+        # (2) Arbitrary point cloud via Rips.
+        D = pairwise_distances(X, args.metric)
         max_dim = max(3, args.max_dim)
         # The slider spans the FULL Vietoris-Rips range: eps 0 -> max pairwise distance
         # (Dmax), or 0 -> --eps-max if the user gives an explicit (smaller) ceiling.
@@ -312,25 +382,25 @@ def build_source(args: argparse.Namespace) -> tuple[FilteredComplex, np.ndarray,
             console.print(f"[yellow]NOTE: max distance {eps_hi:.3f} is infeasible for this "
                           f"{X.shape[0]}-pt cloud (the Rips complex would have millions of "
                           f"simplices); capping the slider at the largest feasible "
-                          f"{eps_max:.3f}. For a full-range Rips torus use a SPARSE bagel "
-                          f"(`--shape donut-rips`); for a clean torus use `--shape donut`.[/yellow]")
+                          f"{eps_max:.3f}. For a clean torus use `--shape donut` (or drop "
+                          f"--no-exact-torus if this is a torus grid).[/yellow]")
         C = _build_rips_safe(X, D, eps_max, max_dim)
         n_faces = sum(1 for s in C.simplexes if len(s) == 3)
-        overfill = _is_overfilling(X.shape[0], n_faces)
-        if overfill:
+        if _is_overfilling(X.shape[0], n_faces):
             _rich_ui.overfill_note(console, X.shape[0], n_faces)
         pts, proj = _to3d(X, "rips")
         return C, pts, proj, None, min(max_dim - 1, 3)
 
     if args.shape == "torus-grid":
-        return _exact_torus2(args.n, "torus_grad", "torus-grid surface (exact T^2 cell complex)")
+        return _exact_torus2(args.n, args.n, "torus_grad", "torus-grid surface (exact T^2 cell complex)")
 
     if args.shape == "donut":
         # MITIGATION (a): the clean bagel = exact T^2 cell complex (NOT Rips). Fast and
         # reads exactly [1, 2, 1] at the top, both rings visible. THIS is the shape to
         # use to SEE a torus reliably. (Rips on a dense bagel over-fills -- see the
         # IMPORTANT note block at the top of this file.)
-        return _exact_torus2(max(args.nper, 8), "donut", "donut / bagel (exact T^2 cell complex)")
+        m = max(args.nper, 8)
+        return _exact_torus2(m, m, "donut", "donut / bagel (exact T^2 cell complex)")
 
     if args.shape == "donut-rips":
         # MITIGATION (b): Real Vietoris-Rips on a bagel, slider over the FULL range
@@ -1102,6 +1172,9 @@ def main() -> int:
                    help="synthetic source (default: torus-grid = exact T^2; donut = clean bagel, "
                         "donut-rips = honest Rips bagel that over-fills)")
     p.add_argument("--points", default=None, help="point-cloud CSV (overrides --shape)")
+    p.add_argument("--no-exact-torus", action="store_true",
+                   help="if the CSV is a regular torus grid, force Vietoris-Rips instead of "
+                        "reconstructing the exact T^2 cell complex (a clean torus, beta=[1,2,1])")
     p.add_argument("--value-cols", nargs="*", default=None)
     p.add_argument("--index-cols", nargs="*", default=None)
     p.add_argument("--metric", default="euclidean",
@@ -1112,10 +1185,10 @@ def main() -> int:
     p.add_argument("--k", type=int, default=2, help="ambient dim for product/sphere")
     p.add_argument("--frac", type=float, default=1.6, help="Rips: eps_max as a fraction of mean nearest-neighbour distance")
     p.add_argument("--eps-max", type=float, default=None,
-                   help="force the slider's max epsilon. Default: auto (connected for sparse "
-                        "clouds; auto-raised to the largest feasible epsilon for dense surfaces). "
-                        "Raise it toward the surface-completion scale to render a denser surface "
-                        "more completely; it is capped at the feasible limit.")
+                   help="force the slider's max epsilon. Default: the full Vietoris-Rips range "
+                        "(0 -> max pairwise distance), auto-capped at the largest feasible "
+                        "epsilon for dense clouds (so it never crashes on millions of simplices). "
+                        "Lower it to render a sparser surface faster; it is capped at feasibility.")
     p.add_argument("--connect-margin", type=float, default=1.2,
                    help="slider reaches at least this many x the connectivity threshold, so at max "
                         "epsilon all points form one connected complex (default 1.2). Use 0 to disable.")

@@ -189,23 +189,22 @@ def test_is_overfilling_helper() -> None:
 
 
 def test_points_dense_bagel_capped_at_feasible(tmp_path: Path) -> None:
-    # The "slider only goes to 0.188" fix, now spanning the FULL Rips range: a dense
-    # bagel loaded as a point cloud must (a) be detected as over-filling, and (b) have
-    # its slider span up to the largest FEASIBLE epsilon -- well above the connectivity
-    # epsilon, but below the infeasible Dmax (which would be millions of simplices).
-    X = G.donut_grid(20, 40)
+    # The "slider only goes to 0.188" fix, now spanning the FULL Rips range: a DENSE
+    # NON-GRID bagel (so it is NOT reconstructed) loaded via --points must (a) be
+    # detected as over-filling, and (b) have its slider capped below the infeasible
+    # Dmax (which would be millions of simplices), at the largest feasible epsilon.
+    X = G.donut(600, seed=0)
+    assert interactive._detect_torus_grid(X) is None, "a random bagel is not a grid"
     csv = tmp_path / "bagel.csv"
     PointSet(X).to_csv(str(csv))
     D = pairwise_distances(X)
-    eps_auto = interactive._eps_max(D, 1.6, 1.2)
     Dmax = float(D.max())
     C, *_ = interactive.build_source(_args("donut", points=str(csv)))
     eps_max = float(C.values.max())
     n_faces = sum(1 for s in C.simplexes if len(s) == 3)
+    assert eps_max < Dmax, "a dense bagel's Dmax is infeasible and must be capped"
     assert interactive._is_overfilling(X.shape[0], n_faces), \
         f"expected an over-filling dense bagel, got {n_faces}/{X.shape[0]} faces/vertex"
-    assert eps_max > eps_auto, "slider must reach past connectivity (largest feasible eps)"
-    assert eps_max < Dmax, "a dense bagel's Dmax is infeasible and must be capped"
 
 
 def test_max_feasible_eps_sparse_reaches_dmax() -> None:
@@ -246,6 +245,66 @@ def test_make_torus_dense_donut_warns() -> None:
     buf2 = io.StringIO()
     mod._warn_dense_donut(args, 64, Console(file=buf2))         # sparse -> silent
     assert buf2.getvalue() == ""
+
+
+# ---- torus-grid detection + exact T^2 reconstruction (the reliable --points fix) ---
+def test_detect_torus_grid_clean() -> None:
+    # A clean donut_grid is detected with the right (nu, nv, R, r).
+    det = interactive._detect_torus_grid(G.donut_grid(24, 64))
+    assert det is not None
+    nu, nv, R, r = det
+    assert (nu, nv) == (24, 64)
+    assert abs(R - 1.0) < 1e-6 and abs(r - 0.35) < 1e-6
+
+
+def test_even_grid_count() -> None:
+    # A regular cyclic grid of cnt lines (each repeated) -> cnt; a random scatter -> None.
+    grid = np.repeat(2 * np.pi * np.arange(24) / 24, 64)
+    assert interactive._even_grid_count(grid) == 24
+    rng = np.random.default_rng(0)
+    assert interactive._even_grid_count(rng.uniform(0, 2 * np.pi, 100)) is None
+
+
+def test_detect_torus_grid_rejects_non_grid() -> None:
+    # A random bagel, a circle, and blobs are NOT a regular torus grid -> None.
+    assert interactive._detect_torus_grid(G.donut(400, seed=0)) is None
+    assert interactive._detect_torus_grid(G.circle_grid(48, radius=1.0)) is None
+    assert interactive._detect_torus_grid(G.gmm(3, 90, 3)) is None
+
+
+def test_points_clean_grid_reconstructs_torus(tmp_path: Path) -> None:
+    # THE HEADLINE FIX: a clean donut_grid CSV loaded via --points is reconstructed as
+    # the EXACT T^2 complex -> a clean torus (beta=[1,2,1]), not the over-filled Rips.
+    X = G.donut_grid(24, 64)
+    csv = tmp_path / "d.csv"
+    PointSet(X).to_csv(str(csv))
+    C, _pts, proj, target, _rd = interactive.build_source(_args("donut", points=str(csv)))
+    assert target == [1, 2, 1]
+    assert betti_at(C, float(C.values.max()))[:3] == [1, 2, 1]
+    assert "exact" in proj
+
+
+def test_points_reconstructed_torus_pairs_with_points(tmp_path: Path) -> None:
+    # The reconstructed complex's vertices live on a genuine bagel surface (so the 3D
+    # view draws edges between truly adjacent grid points = a complete torus) and there
+    # are exactly 2 triangles per grid cell of the T^2 complex.
+    X = G.donut_grid(24, 64)
+    csv = tmp_path / "d.csv"
+    PointSet(X).to_csv(str(csv))
+    C, pts, _proj, _target, _rd = interactive.build_source(_args("donut", points=str(csv)))
+    assert is_bagel(pts)
+    n_faces = sum(1 for s in C.simplexes if len(s) == 3)
+    assert n_faces == 2 * 24 * 64
+
+
+def test_points_no_exact_torus_forces_rips(tmp_path: Path) -> None:
+    # --no-exact-torus forces Rips even for a detected grid (over-fills, not a torus).
+    X = G.donut_grid(24, 64)
+    csv = tmp_path / "d.csv"
+    PointSet(X).to_csv(str(csv))
+    C, *_ = interactive.build_source(_args("donut", points=str(csv), no_exact_torus=True))
+    n_faces = sum(1 for s in C.simplexes if len(s) == 3)
+    assert interactive._is_overfilling(X.shape[0], n_faces)
 
 
 def test_connectivity_threshold_matches_components() -> None:
