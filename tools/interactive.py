@@ -57,11 +57,13 @@ import numpy as np
 from rich.console import Console
 from rich.progress import Progress
 
+console = Console()
+
 import _rich_ui
 from vrtda import PointSet, pairwise_distances
 from vrtda.complexes import FilteredComplex, build_rips, make_torus_grid_complex
 from vrtda.errors import TooLargeError, VrtdaError
-from vrtda.persistence import persistent_homology
+from vrtda.persistence import Barcode, Interval, persistent_homology
 from vrtda import datasets, generators as G
 from vrtda.beartype_guard import beartype_module
 
@@ -248,6 +250,281 @@ def _torus_betti(k: int) -> list[int]:
     return [int(comb(k, d)) for d in range(k + 1)]
 
 
+# ---- Betti vector -> homotopy-type recognition (the structure catalogue) ----
+# Given the Betti numbers of a space, say what it is HOMOTOPY-EQUIVALENT to (not just
+# "matches"). The catalogue is the classic "Betti fingerprints" reference set: spheres,
+# tori, projective spaces, closed/open surfaces, graphs and common products -- the exact
+# two-sheet list of the standard TDA cheat sheet. A match is a HYPOTHESIS about the
+# homotopy type (it cannot be a ground-truth claim for arbitrary data), so the wording
+# stays "homotopy equivalent to ..." and unknown signatures are reported honestly.
+
+_FIXED_TOPO: tuple[tuple[tuple[int, ...], str], ...] = (
+    ((1,),             "a contractible space (a point, a ball or a tree)"),
+    ((1, 1),           "a circle S¹ (one independent loop / a single period)"),
+    ((1, 0, 1),        "a 2-sphere S² (a closed surface wrapping one void)"),
+    ((1, 0, 0, 1),     "a 3-sphere S³ (or a lens space / ℝP³)"),
+    ((1, 1, 0),        "a cylinder or Möbius band (one 1-cycle + a boundary)"),
+    ((1, 0, 0),        "a disk or plane (no cycles)"),
+    ((1, 2, 1),        "a 2-torus T² = S¹×S¹ (two independent periods)"),
+    ((1, 1, 1, 1),     "a product S¹ × S² (a loop wound around a sphere)"),
+    ((1, 0, 2, 0, 1),  "a product S² × S² (two independent nested shells)"),
+    ((1, 2, 2, 1),     "a Heisenberg nilmanifold (β equals T³, but is NOT a torus!)"),
+    ((1, 0, 1, 0, 1),  "complex projective space ℂP²"),
+)
+
+
+def _strip_trailing_zeros(betti: list[int]) -> list[int]:
+    """Drop trailing zeros. Used ONLY where the extra zero-dimensions would be noise
+    (transition detection); for structural matching the full-length vector is kept,
+    because (1,2) a graph and (1,2,0) an open surface are different signatures."""
+    v = [int(b) for b in betti]
+    while v and v[-1] == 0:
+        v.pop()
+    return v or [0]
+
+
+def _pad(v: list[int], L: int) -> list[int]:
+    """Pad (never truncate) a signature to length L with zeros."""
+    vv = [int(b) for b in v]
+    return vv + [0] * (L - len(vv))
+
+
+def _sig_matches(sig: list[int], v: list[int]) -> bool:
+    """Signature equality, ignoring differences made only of trailing zero columns."""
+    return _pad(sig, max(len(sig), len(v))) == _pad(v, max(len(sig), len(v)))
+
+
+def _topology_name(betti: list[int]) -> str:
+    """Best homotopy-type description for a Betti vector. Returns a hypothesis phrased as
+    "homotopy equivalent to ..." (never a ground-truth claim). Tries exact catalogue
+    signatures first, then parametric families (spheres/tori/surfaces/projective spaces),
+    and finally reports the vector as unrecognized if nothing plausible fits. The FULL
+    vector is matched (length = reported maxdim + 1): (1,2) and (1,2,0) are different."""
+    from math import comb
+    v = [int(b) for b in betti]
+    for sig, name in _FIXED_TOPO:
+        if list(sig) == v:
+            return f"homotopy equivalent to {name}"
+    if len(v) == 1:
+        return ("a single isolated point (contractible)"
+                if v[0] == 1
+                else f"{v[0]} disjoint points / clusters (a wedge of {v[0]} copies of S⁰)")
+    if len(v) >= 2 and v[0] > 1 and all(b == 0 for b in v[1:]):
+        return f"{v[0]} disjoint points / clusters (a wedge of {v[0]} copies of S⁰)"
+    if len(v) == 2 and v[0] == 1 and v[1] >= 1:
+        return f"a connected graph with {v[1]} independent cycle(s) (cycle rank {v[1]})"
+    if len(v) == 2 and v[0] == 1 and v[1] == 0:
+        return "a connected tree-like region (no cycles yet)"
+    if len(v) == 3 and v[0] == 1 and v[2] == 0 and v[1] >= 1:
+        return f"an open surface / disk with {v[1]} hole(s)"
+    if len(v) == 3 and v[0] == 1 and v[2] == 1 and v[1] >= 2 and v[1] % 2 == 0:
+        return f"a closed orientable surface of genus {v[1] // 2}"
+    if len(v) >= 3 and v[0] == 1 and all(b == 0 for b in v[1:]):
+        return "a contractible space (a point, a ball or a tree)"
+    if len(v) >= 2 and v[0] == 1:
+        nz = [i for i, b in enumerate(v) if b]
+        if nz and nz[-1] >= 1:
+            n = nz[-1]
+            p: list[int] = [comb(n, k) for k in range(n + 1)]
+            if sum(p) > 1 and _pad(p, len(v)) == v:
+                return f"the {n}-torus Tⁿ = (S¹)ⁿ  (βₖ = C({n}, k), {2 ** n} classes total)"
+    if len(v) >= 3 and v[0] == 1 and v.count(1) == 2 and all(0 <= b <= 1 for b in v):
+        nz = [i for i, b in enumerate(v) if b == 1]
+        if nz == [0, len(v) - 1]:
+            return f"the {len(v) - 1}-sphere S^{len(v) - 1}"
+    if len(v) >= 5 and len(v) % 2 == 1 and all(v[k] == 1 for k in range(0, len(v), 2)) \
+            and all(v[k] == 0 for k in range(1, len(v), 2)):
+        return f"complex projective space ℂP^{(len(v) - 1) // 2}"
+    if len(v) >= 5 and len(v) % 4 == 1 and all(v[k] == 1 for k in range(0, len(v), 4)) \
+            and all(v[k] == 0 for k in range(len(v)) if k % 4 != 0):
+        return f"quaternion projective space ℍP^{(len(v) - 1) // 4}"
+    if len(v) >= 2 and v[0] == 1:
+        nz = [b for b in v[1:] if b != 0]
+        dims = [d for d, b in enumerate(v[1:], 1) if b != 0]
+        if len(dims) == 1 and all(b == nz[0] for b in nz):
+            return f"a wedge of {nz[0]} copies of S^{dims[0]}"
+    nz_pos = [(d, b) for d, b in enumerate(v) if b]
+    if len(nz_pos) == 2 and nz_pos[0][0] == 0 and len(v) >= 2 \
+            and all(b == nz_pos[0][1] for _, b in nz_pos) \
+            and nz_pos[0][1] >= 2:
+        c = nz_pos[0][1]
+        d = nz_pos[1][0]
+        return (f"the disjoint union of {c} copies of S^{d} "
+                f"({c} separate components, each with its own H_{d})")
+    return (f"an unrecognized Betti signature ({v}) — "
+            "report the vector and its construction")
+
+
+def _reference_signatures() -> list[tuple[str, list[int]]]:
+    """The nearest-neighbour retina: representative Betti fingerprints of the standard
+    catalogue (spheres/tori/surfaces/projective spaces/graphs/products), used to find
+    topological STRUCTURE SIMILARITY when the exact signature is unknown."""
+    from math import comb
+    refs: list[tuple[str, list[int]]] = []
+    for m in range(1, 9):
+        sv = [0] * (m + 1)
+        sv[0] = sv[m] = 1
+        refs.append((f"m-sphere S^{m}", sv))
+    for n in range(1, 9):
+        refs.append((f"n-torus T^{n}", [comb(n, k) for k in range(n + 1)]))
+    for g in range(1, 6):
+        refs.append((f"closed surface of genus {g}", [1, 2 * g, 1]))
+    for n in range(1, 5):
+        refs.append((f"ℂP^{n}", [1 if k % 2 == 0 else 0 for k in range(2 * n + 1)]))
+    for n in range(1, 4):
+        refs.append((f"ℍP^{n}", [1 if k % 4 == 0 else 0 for k in range(4 * n + 1)]))
+    for c in range(2, 9):
+        refs.append((f"connected graph with {c} cycles", [1, c]))
+        refs.append((f"open surface with {c} holes", [1, c, 0]))
+    for k in range(2, 6):
+        refs.append((f"{k} disjoint points", [k]))
+    refs.append(("product S¹ × S²", [1, 1, 1, 1]))
+    refs.append(("product S² × S²", [1, 0, 2, 0, 1]))
+    refs.append(("Heisenberg nilmanifold", [1, 2, 2, 1]))
+    return refs
+
+
+def _closest_topologies(betti: list[int], top: int = 3) -> list[dict[str, object]]:
+    """Nearest known topologies to a Betti vector (STRUCTURE SIMILARITY). Distance is the
+    L1 difference of the Betti vectors (padded to a common length) plus a penalty for a
+    different top non-zero dimension, so e.g. (1,3,2,1) is close to a 3-torus T³=(1,3,3,1)
+    but (1,2) a graph stays far from (1,2,0) an open surface. Returns the `top` closest
+    signatures that are not the vector itself, each as {"name", "dist"}."""
+    v = [int(b) for b in betti]
+    scored: list[tuple[int, str]] = []
+    for name, sig in _reference_signatures():
+        if _sig_matches(v, sig):
+            continue
+        L = max(len(v), len(sig))
+        dist = sum(abs(a - b) for a, b in zip(_pad(v, L), _pad(sig, L)))
+        dim_v = len(v) - 1 - ([0] + list(reversed(v))).index(0) if v else 0
+        dim_s = len(sig) - 1 - ([0] + list(reversed(sig))).index(0) if sig else 0
+        dist += abs(dim_v - dim_s)
+        scored.append((dist, name))
+    scored.sort(key=lambda t: (t[0], t[1]))
+    return [{"name": name, "dist": int(dist)} for dist, name in scored[:top]]
+
+
+# ---- Betti vector -> ATTRACTOR / REPELLOR / BIFURCATION recognition ---------
+# The dynamics cheat sheet: what will-be/should-be-attractor structures the current
+# (or evolving) Betti signature is compatible with. Attractors and REPELLORS are
+# topologically identical (reversing time turns one into the other), so these are
+# HYPOTHESES: they say "under an attractor interpretation this is the dynamics you'd
+# expect", never a proof. Bifurcation labels come from comparing consecutive slider
+# steps ((1,0) -> (1,1) = Hopf, (1,1) -> (1,2,1) = Neimark–Sacker, ...).
+
+_DYNAMICS_FIXED: tuple[tuple[tuple[int, ...], str], ...] = (
+    ((1,), "a single stable fixed point (everything converges to one state)"),
+    ((1, 1), "a limit-cycle / periodic attractor (homotopy type of S¹ — one period)"),
+    ((1, 0, 1), "a closed energy-shell state space S² (a stable core it circles)"),
+    ((1, 0, 0, 1), "a 3D state space closed on itself (S³ or lens-type)"),
+    ((1, 2, 1), "a quasi-periodic 2-torus attractor (two incommensurable frequencies)"),
+    ((1, 3, 3, 1), "a quasi-periodic 3-torus (rare — usually on the route to chaos, Ruelle–Takens)"),
+    ((1, 4, 6, 4, 1), "a quasi-periodic 4-torus attractor (four incommensurable frequencies)"),
+    ((1, 2, 0), "a Lorenz-/Chua-type chaotic attractor (two 'wings', no bulk) or two merged limit cycles"),
+    ((1, 1, 0), "a Rössler-/Duffing-type folded attractor (one dominant loop) or a limit cycle on a surface"),
+    ((1, 0, 1, 0, 1), "a complex-projective-type state space ℂP²"),
+)
+
+
+def _dynamics_name(betti: list[int]) -> str:
+    """Best ATTRACTOR-style dynamics hypothesis compatible with a Betti vector. Always a
+    hypothesis (attractor/repellor are indistinguishable topologically), phrased as such.
+    The FULL vector is matched (length = reported maxdim + 1): (1,1) a limit cycle and
+    (1,1,0) a Rössler-folded surface are DIFFERENT signatures."""
+    from math import comb
+    v = [int(b) for b in betti]
+    for sig, name in _DYNAMICS_FIXED:
+        if list(sig) == v:
+            return (f"dynamics: {name} "
+                    "(repellors look identical — reverse time t→−t to expose them)")
+    if len(v) == 1:
+        if v[0] == 1:
+            return "dynamics: a single stable fixed point (repellors look identical — reverse time)"
+        return (f"dynamics: {v[0]} coexisting stable fixed points "
+                f"(multistability — {v[0]} basins)")
+    if len(v) == 2 and v[0] == v[1] and v[0] >= 1:
+        return (f"dynamics: {v[0]} disjoint limit cycles "
+                f"({v[0]} independent periods / basins)")
+    if len(v) == 2 and v[0] == 1 and v[1] == 0:
+        return "dynamics: one connected region with no 1-cycles (a growing basin)"
+    if len(v) == 2 and v[0] >= 1 and v[1] == 0:
+        return f"dynamics: {v[0]} disjoint growing basins (merging as ε grows)"
+    if len(v) >= 2 and v[0] == 1 and v[-1] == 1:
+        n = len(v) - 1
+        if all(b == comb(n, k) for k, b in enumerate(v)):
+            return (f"dynamics: a quasi-periodic {n}-torus attractor "
+                    f"(KAM / integrable: {n} incommensurable frequencies)")
+    if len(v) == 3 and v[0] == 1 and v[2] == 0 and v[1] >= 1:
+        if v[1] >= 8:
+            return (f"dynamics: a richly structured basin network ({v[1]} holes — "
+                    "check for Wada / riddled basins)")
+        return f"dynamics: {v[1]} basin region(s) / islands (a Swiss-cheese state space — repellors sit in the holes)"
+    if len(v) == 3 and v[0] == 1 and v[2] == 1 and v[1] >= 2 and v[1] % 2 == 0:
+        return (f"dynamics: a genus-{v[1] // 2} handle-body state space "
+                f"(g = {v[1] // 2} topological holes — e.g. synchronized dynamics on a 2D torus-like shell)")
+    if len(v) == 2 and v[0] == 1 and v[1] >= 1:
+        if v[1] == 2:
+            return "dynamics: two linked cycles (figure-eight — homoclinic/heteroclinic candidates)"
+        return f"dynamics: a limit-cycle network with {v[1]} cycles"
+    if len(v) >= 2 and v[0] == 1 and all(b == 0 for b in v[1:]):
+        return "dynamics: one connected region free of cycles/holes — a single attracting point or basin (a sink)"
+    return f"dynamics: unrecognized ({v}) — typically multistability or a high-dim manifold"
+
+
+_DYNAMICS_TRANSITIONS: tuple[tuple[tuple[int, ...], tuple[int, ...], str], ...] = (
+    ((1,), (1, 1), "Hopf bifurcation: a fixed point spawns a limit cycle (β₁: 0 → 1)"),
+    ((1,), (2,), "pitchfork / symmetry-breaking: one fixed point splits in two (β₀: 1 → 2)"),
+    ((2,), (1,), "saddle–node / crisis: two fixed points annihilate into one (β₀: 2 → 1)"),
+    ((1, 1), (1, 2, 1), "Neimark–Sacker: a limit cycle grows a second frequency → 2-torus"),
+    ((1, 2, 1), (1,), "torus collapse: quasi-periodicity dies back to a point (β₁: 2 → 0, β₂: 1 → 0)"),
+    ((1, 3, 3, 1), (1,), "Ruelle–Takens–Newhouse: the 3-torus breaks down, chaos candidate"),
+    ((2, 2), (1, 1), "two limit cycles merge into one (attractor collision)"),
+    ((1, 1), (1,), "blue-sky catastrophe / saddle-node on a cycle: the loop shrinks to a point (β₁ → 0)"),
+)
+
+
+def _dynamics_transition(prev: list[int], cur: list[int]) -> str:
+    """If consecutive slider states (prev, cur) cross a known BIFURCATION, name it. Empty
+    string when nothing classic matches."""
+    a = _strip_trailing_zeros(prev)
+    b = _strip_trailing_zeros(cur)
+    for pa, pb, name in _DYNAMICS_TRANSITIONS:
+        if list(pa) == a and list(pb) == b:
+            return name
+    return ""
+
+
+_DYNAMICS_REFS: tuple[tuple[str, list[int]], ...] = (
+    ("fixed point", [1]), ("2 fixed points", [2]), ("3 fixed points", [3]),
+    ("limit cycle", [1, 1]), ("2 disjoint cycles", [2, 2]),
+    ("2-torus T² attractor", [1, 2, 1]), ("3-torus T³ attractor", [1, 3, 3, 1]),
+    ("4-torus T⁴ attractor", [1, 4, 6, 4, 1]),
+    ("Lorenz/Chua attractor", [1, 2, 0]), ("Rössler-type attractor", [1, 1, 0]),
+    ("sphere S²", [1, 0, 1]), ("sphere S³", [1, 0, 0, 1]), ("ℂP² state space", [1, 0, 1, 0, 1]),
+    ("basin network", [1, 4, 0]), ("basin islands", [1, 2, 0]),
+)
+
+
+def _closest_dynamics(betti: list[int], top: int = 3) -> list[dict[str, object]]:
+    """Nearest attractor/repellor families to a Betti vector (dynamics similarity)."""
+    v = [int(b) for b in betti]
+    scored: list[tuple[int, str]] = []
+    for name, sig in _DYNAMICS_REFS:
+        if _sig_matches(v, sig):
+            continue
+        L = max(len(v), len(sig))
+        dist = sum(abs(a - b) for a, b in zip(_pad(v, L), _pad(sig, L)))
+        for i in range(L):
+            pass  # the padded L1 above already covers the dim-info columns
+        if L <= 4:
+            dist += abs(sum(v[i] for i in range(2, len(v)) if i % 2 == 0 and i >= 2)
+                        - sum(sig[i] for i in range(2, len(sig)) if i % 2 == 0 and i >= 2))
+        scored.append((dist, name))
+    scored.sort(key=lambda t: (t[0], t[1]))
+    return [{"name": name, "dist": int(dist)} for dist, name in scored[:top]]
+
+
 def _exact_torus2(nu: int, nv: int, kind: str, label: str,
                   R: float = 1.0, r: float = 0.35) -> tuple[FilteredComplex, np.ndarray, str, list[int], int]:
     """The exact T^2 cell complex with a positional filtration (vertices, then edges,
@@ -276,9 +553,11 @@ def _exact_torus2(nu: int, nv: int, kind: str, label: str,
             vals.append(2.0 + 0.8 * ph)
     C = FilteredComplex(
         simps, np.array(vals, dtype=np.float64),
-        np.array([len(s) - 1 for s in simps], dtype=np.int64), kind, {"nu": nu, "nv": nv},
+        np.array([len(s) - 1 for s in simps], dtype=np.int64), kind,
+        {"nu": nu, "nv": nv},
     )
     pts = _torus_surface(nu, nv, R, r)
+    C.params["raw"] = pts
     # SAFEGUARD (runtime, reliability): the exact T^2 complex MUST read [1, 2, 1] at the
     # top of the slider. If a refactor ever changes this, fail loudly instead of
     # silently showing a wrong torus. The exact complex is small, so this check is cheap.
@@ -538,7 +817,7 @@ def _fit_torus2(X: np.ndarray, nu: int, nv: int, R: float, r: float,
     C = FilteredComplex(
         simps, np.array(vals, dtype=np.float64),
         np.array([len(s) - 1 for s in simps], dtype=np.int64),
-        kind, {"nu": nu, "nv": nv, "R": R, "r": r, "fitted": True},
+        kind, {"nu": nu, "nv": nv, "R": R, "r": r, "fitted": True, "raw": pts},
     )
     # SAFEGUARD (runtime, reliability): at the top of the slider the fitted T^2 MUST
     # read exactly [1, 2, 1] -- a closed torus with no holes. If it ever does not, fail
@@ -573,7 +852,6 @@ def build_source(args: argparse.Namespace) -> tuple[FilteredComplex, np.ndarray,
         #      torus. --no-exact-torus forces the honest Rips instead.
         #  (2) Any other cloud: plain Vietoris-Rips over the full Dmax range.
         X = PointSet.from_csv(args.points, value_cols=args.value_cols, index_cols=args.index_cols).data
-        console = Console()
         if not getattr(args, "no_exact_torus", False):
             fit = _torus_fit(X)
             if fit is not None:
@@ -611,6 +889,7 @@ def build_source(args: argparse.Namespace) -> tuple[FilteredComplex, np.ndarray,
         if _is_overfilling(X.shape[0], n_faces):
             _rich_ui.overfill_note(console, X.shape[0], n_faces)
         pts, proj = _to3d(X, "rips")
+        _attach_raw(C, X)
         return C, pts, proj, None, min(max_dim - 1, 3)
 
     if args.shape == "torus-grid":
@@ -642,6 +921,7 @@ def build_source(args: argparse.Namespace) -> tuple[FilteredComplex, np.ndarray,
         with _rich_ui.timed(Console(), "Building Rips bagel (full range 0 -> max distance)"):
             C = _build_rips_safe(X, D, eps_max, max_dim)
         pts, proj = _to3d(X, "rips")
+        _attach_raw(C, X)
         return C, pts, proj, [1, 2, 1], 2
 
     # Rips-based synthetic sources: each has a known intrinsic dimension k, and (for the
@@ -662,13 +942,28 @@ def build_source(args: argparse.Namespace) -> tuple[FilteredComplex, np.ndarray,
         raise SystemExit(f"unknown shape {args.shape!r}")
 
     D = pairwise_distances(X, args.metric)
-    eps_max = _eps_max(D, args.frac, getattr(args, "connect_margin", 1.2))
+    # Slider must span the FULL feasible Vietoris-Rips range (0 .. max pairwise
+    # distance), exactly as the --points path does -- a connectivity-scaled ceiling is
+    # too small to ever close a space. Capped at the largest FEASIBLE epsilon so a
+    # dense cloud can't blow up the pure-Python homology or the browser. Exception:
+    # the sparse product T^2 keeps its connectivity ceiling -- its clean [1,2,1]
+    # plateau is exactly why the (already exact-torus-path) demo exists.
+    if args.shape == "product" and k == 2:
+        eps_max = _eps_max(D, args.frac, getattr(args, "connect_margin", 1.2))
+    else:
+        eps_hi = float(D.max())
+        eps_max = _max_feasible_eps(X, D, eps_hi, budget=_FEASIBLE_MAX_BUDGET)
+        if eps_max < eps_hi - 1e-9:
+            console.print(f"[yellow]NOTE: max distance {eps_hi:.3f} is infeasible for this "
+                          f"{X.shape[0]}-pt Rips complex; capping the slider at the largest "
+                          f"feasible {eps_max:.3f}.[/yellow]")
     # Cap at 3-simplices: this is a fast beta_0..beta_2 visualizer, and (k+1)-simplices
     # are combinatorially infeasible for k>=3 (5-cliques explode). For k>=3 the low
     # dimensions beta_0..beta_2 are still exact under Rips; the top class needs the
     # exact cell complex (see tests/test_betti_shapes.py).
     max_dim = min(max(k + 1, 2, args.max_dim), 3)
     C = _build_rips_safe(X, D, eps_max, max_dim)
+    _attach_raw(C, X)
     if args.shape == "product" and k == 2:
         # The R^4 product 2-torus is 4-fold symmetric, so a PCA-3D view collapses to a
         # bare cylinder. Show the classic bagel instead: donut_grid(n,n) is the exact
@@ -683,6 +978,13 @@ def build_source(args: argparse.Namespace) -> tuple[FilteredComplex, np.ndarray,
 
 def _round_list(x: list[float], nd: int = 5) -> list[float]:
     return [round(float(v), nd) for v in x]
+
+
+def _attach_raw(C: FilteredComplex, X: np.ndarray) -> None:
+    """Attach the original (possibly multi-dimensional) coordinates of the complex's
+    vertices to C.params, so the browser can re-project the view (PCA / raw dims /
+    random) without changing the (independent) topology. Vertex i <-> cloud row i."""
+    C.params["raw"] = X
 
 
 def build_payload(args: argparse.Namespace) -> dict[str, object]:
@@ -706,6 +1008,120 @@ def build_payload(args: argparse.Namespace) -> dict[str, object]:
     table = bc.betti_function(grid)
     maxdim = min(report_dim, int(table.shape[1] - 1))
     table = table[:, :maxdim + 1]
+
+    # Per-slider-position homotopy-type recognition. The BETA VECTOR read straight off a
+    # Rips complex at a single epsilon over-fills (dense clouds never read true) and its
+    # TOP dimension is unpaired garbage -- so the recognition layer runs on the PROMINENT
+    # (persistent) classes that are alive at each grid point. For exact cell complexes
+    # the top dimension is claimed too (its classes are genuine). The raw table is still
+    # what the cards show; only the hypothesis text uses the persistent structure.
+    topo_rows: list[list[int]] = table.astype(int).tolist()
+    top_claimable = C.kind != "rips"
+    struct_rows = _struct_at(bc, grid, maxdim, top_claimable=top_claimable)
+    topo_messages = [_topology_name(row) for row in struct_rows]
+    topo_closest = [_closest_topologies(row) for row in struct_rows]
+    dyn_messages = [_dynamics_name(row) for row in struct_rows]
+    dyn_closest = [_closest_dynamics(row) for row in struct_rows]
+    dyn_transitions: list[str] = [""] * len(topo_rows)
+    for i in range(1, len(topo_rows)):
+        dyn_transitions[i] = _dynamics_transition(topo_rows[i - 1], topo_rows[i])
+    # Original (multi-dimensional) coordinates of the displayed points, so the browser can
+    # re-project interactively (PCA / raw dims / random) without touching the topology.
+    raw_cloud = np.asarray(C.params.get("raw", pts), dtype=np.float64)
+    if raw_cloud.shape[0] != len(pts):
+        raise VrtdaError(
+            f"internal error: raw cloud size {raw_cloud.shape[0]} != display points "
+            f"{len(pts)} (projection panel would silently misalign); fix build_source.")
+    if np.ndim(raw_cloud) != 2 or raw_cloud.shape[1] < 1:
+        raise VrtdaError(f"internal error: unplottable raw cloud shape={raw_cloud.shape}")
+    shell_facts = _shell_facts(raw_cloud)
+
+# FEATURE: the persistent STRUCTURE -- the honest one-line answer. Priority:
+#   (1) EXACT cell complex      -> the closed complex at the top IS the answer.
+#   (2) GEOMETRIC ROUND SHELL   -> read the sphere/torus purely from geometry; only the
+#                                  number of STRONG 1-cycles (length >= 0.30 x full range)
+#                                  distinguishes a k-sphere (0) from a torus-hypersurface.
+#   (3) Rips cloud (no shell)   -> longest STABLE PLATEAU of the Betti signature: the ε
+#                                  window where nothing changes (a torus sits at [1,2,0]
+#                                  for a long stretch while the over-filling tail and the
+#                                  ε=0 "all-separate" start are both length-1 noise).
+# Priority (3) result is a hypothesis only -- Rips dense clouds never guarantee a read.
+    top_claimable = C.kind != "rips"
+    feat_index = int(len(table) - 1)
+    if C.kind != "rips":
+        feat_row = [int(b) for b in table[-1]]
+    else:
+        feat_row = [0] * (maxdim + 1)
+        feat_index = 0
+        if shell_facts and int(shell_facts["tangent"]) >= 1:
+            h1 = sum(1 for iv in bc.intervals
+                     if int(iv.dim) == 1 and float(iv.length) >= 0.30 * eps_max)
+            k = int(shell_facts["tangent"])
+            if k == 1:
+                feat_row = [1, 1] + [0] * (maxdim - 1)
+                feat_index = len(table) - 1
+            else:
+                f1 = min(h1, k)
+                feat_row = [1] + [f1] + [0] * (maxdim - 1)
+                feat_index = len(table) - 1
+
+        if feat_index == 0:
+            # (3) plateau read
+            capped = [[(int(v) if (i < maxdim or maxdim == 0) else 0)
+                       for i, v in enumerate(row)] for row in table]
+
+            def _trivial(row: list[int]) -> bool:
+                return row[0] == 1 and all(v == 0 for v in row[1:])
+
+            runs: list[tuple[int, int, list[int]]] = []
+            cur: list[int] | None = None
+            cur_start = 0
+            for i in range(len(capped) + 1):
+                row = capped[i] if i < len(capped) else None
+                if row != cur:
+                    if cur is not None:
+                        runs.append((cur_start, i - cur_start, cur))
+                    cur = row
+                    cur_start = i
+            saw_structure = any(s[0] > 1 or any(v != 0 for v in s[1:])
+                                for _, _, s in runs)
+            cands = [(st, L, s) for (st, L, s) in runs
+                     if not (saw_structure and (_trivial(s) or st == 0))]
+            if not cands:
+                cands = runs
+            best_score = -1.0
+            best_mid = 0
+            for st, L, s in cands:
+                mid = st + (L - 1) // 2
+                score = float(L) + 0.5 * (1.0 if s[0] > 1 else 0.0) \
+                    + 0.3 * (1.0 if any(v != 0 for v in s[1:]) else 0.0) \
+                    - 0.3 * (mid / max(1, len(capped)))
+                if score > best_score:
+                    best_score = score
+                    best_mid = mid
+            feat_index = best_mid
+            feat_row = [(int(v) if (i < maxdim or maxdim == 0) else 0)
+                        for i, v in enumerate(table[feat_index])]
+    topo_feature = _topology_name(feat_row)
+    dyn_feature = _dynamics_name(feat_row)
+    f1 = feat_row[1] if maxdim >= 1 else 0
+    if shell_facts:
+        k = int(shell_facts["tangent"])
+        R = float(shell_facts["R"])
+        rms = float(shell_facts["rms"])
+        geo = f"every point sits ≈R={R:.3f} from the centroid (rms {rms:.1%}) — a {k}D tangent patch"
+        if k == 1:
+            topo_feature = (f"a 1-sphere / circle S¹ (radius R≈{R:.2f}): {geo}; one "
+                            f"independent loop, no enclosed volume.")
+            dyn_feature = _dynamics_name([1, 1])
+        elif f1 == 0:
+            topo_feature = (f"a {k}-sphere S^{k} shell (radius R≈{R:.2f}): {geo}; the enclosed "
+                            f"volume is the TOP class — certify it with an explicit cell "
+                            f"complex, a Rips cloud cannot (documented over-fill).")
+            dyn_feature = _dynamics_name([int(feat_row[0]), 0, 0])
+        else:
+            topo_feature = (f"a round torus-hypersurface T^{f1} (radius R≈{R:.2f}): "
+                            f"{geo}; the {f1} independent H_1 cycles are the frequencies.")
 
     n = len(pts)
     edges = [[int(a), int(b), round(float(C.values[C.index_of((int(a), int(b)))]), 5)]
@@ -736,9 +1152,20 @@ def build_payload(args: argparse.Namespace) -> dict[str, object]:
         "target": target,
         "maxdim": maxdim,
         "points": [[round(float(v), 5) for v in row] for row in pts],
+        "raw": [[round(float(v), 5) for v in row] for row in raw_cloud],
         "edges": edges,
         "faces": faces,
         "betti": {"grid": _round_list(list(grid)), "table": table.tolist(), "maxdim": maxdim},
+        "topo_messages": topo_messages,
+        "topo_closest": topo_closest,
+        "dyn_messages": dyn_messages,
+        "dyn_closest": dyn_closest,
+        "dyn_transitions": dyn_transitions,
+        "struct_rows": struct_rows,
+        "topo_feature": topo_feature,
+        "dyn_feature": dyn_feature,
+        "feat_row": feat_row,
+        "shell_facts": shell_facts,
         "intervals": intervals,
     }
 
@@ -765,6 +1192,155 @@ def parse_layers(spec: str | None, data_dir: str | Path | None = None) -> list[i
     except ValueError:
         raise SystemExit(f"cannot parse --layers {spec!r}")
     return [L for L in vals if L in all_l]
+
+
+def _cloud_dynamics_fingerprint(
+        X3: np.ndarray, sub: int = 60, max_simplices: int = 40000) -> list[int]:
+    """Cheap per-layer dynamics fingerprint for ONE time step's point cloud (already
+    PCA-3D). Builds a Vietoris-Rips complex (max_dim=2, hard simplex budget) and reads
+    THREE scale-free, persistence-based numbers instead of a raw single-scale Betti:
+      beta_0' = components still separate past ~1.2x median-NN  (multistability, k basins)
+      beta_1' = 1-cycles living >= 10% of the full distance range (loops / limit cycles)
+      beta_2' = essential 2-voids (never filled: torus / sphere shells)
+    These map straight onto the dynamics catalogue (fixed point / limit cycle / torus /
+    Lorenz cycles / basins) and are robust because they ignore Rips "over-fill" garbage.
+    Returns a hypothesis vector of length 3, capped so absurd values can't leak out."""
+    from vrtda.complexes import build_rips
+    n = len(X3)
+    if n < 4:
+        return [max(1, n), 0, 0]
+    if n > sub:
+        idx = np.linspace(0, n - 1, sub).astype(int)
+        X3 = X3[idx]
+        n = sub
+    D = pairwise_distances(X3, "euclidean")
+    dmax = float(np.max(np.triu(D, 1)))
+    m = D + np.eye(n) * 1e15
+    submin = float(np.median(m.min(1)))
+    C = None
+    for md in (2, 1):
+        try:
+            C = build_rips(X3, D, dmax, max_dim=md, max_simplices=max_simplices)
+            break
+        except TooLargeError:
+            C = None
+    if C is None:
+        return [1, 0, 0]
+    bc = persistent_homology(C)
+    comps = 0
+    h1 = 0
+    h2 = 0
+    for it in bc.intervals:
+        d = int(it.dim)
+        birth = float(it.birth)
+        death = float(it.death)
+        if d == 0:
+            if death >= 1.2 * submin:
+                comps += 1
+        elif d == 1:
+            if np.isinf(death):
+                h1 += 1
+            elif death - birth >= 0.10 * dmax:
+                h1 += 1
+        elif d == 2 and np.isinf(death):
+            h2 += 1
+    return [min(comps, 8), min(h1, 8), min(h2, 4)]
+
+
+def _prominent_intervals(bc: Barcode, eps_max: float, maxdim: int,
+                         thr: float = 0.15,
+                         top_claimable: bool = False) -> dict[int, list[Interval]]:
+    """PROMINENT (persistent) intervals per dimension: the classes the recognition layer
+    trusts. Robust de-noising, scale-aware:
+
+      * floor: a class must live >= thr x the FULL filtration range;
+      * scale-gate (dim >= 1): if even the LONGEST survivor sits below half the filtration
+        range, the deck is sub-structural noise -> claim nothing (0 classes);
+      * gap-select: among the survivors, keep the prefix above the largest length gap;
+      * top dimension: claimed ONLY for EXACT complexes (top_claimable=True) where the top
+        classes are genuine. For Rips the top dimension is NEVER claimed: every class is
+        essential there (nothing cancels it above the cap) and Rips over-fills the real
+        topology (see the IMPORTANT note at the top) -- that is exactly the "the top class
+        needs the exact cell complex" case. Silent "no claim" is a safe failure; a wrong
+        number is not. Dimension 0 is always claimed: components kill cleanly everywhere.
+    """
+    out: dict[int, list[Interval]] = {d: [] for d in range(maxdim + 1)}
+    floor = thr * float(eps_max)
+    for d in range(maxdim + 1):
+        ivs = [iv for iv in bc.intervals if int(iv.dim) == d]
+        if d == maxdim and maxdim > 0 and not top_claimable:
+            out[d] = []
+            continue
+        fin = sorted((iv for iv in ivs if np.isfinite(iv.length) and iv.length >= floor),
+                     key=lambda iv: float(iv.length), reverse=True)
+        ess = [iv for iv in ivs if iv.is_essential]
+        keep: list[Interval] = []
+        if d == 0:
+            if fin:
+                lens = [float(iv.length) for iv in fin]
+                if len(lens) > 1:
+                    gaps = [lens[i] - lens[i + 1] for i in range(len(lens) - 1)]
+                    gi = int(max(range(len(gaps)), key=lambda i: gaps[i]))
+                    if gaps[gi] >= 0.35 * lens[0]:
+                        fin = fin[:max(gi + 1, 1)]
+                keep = fin
+                if not fin:
+                    keep = fin
+            keep = keep + ess
+        else:
+            if fin and float(fin[0].length) >= 0.5 * float(eps_max):
+                lens = [float(iv.length) for iv in fin]
+                if len(lens) > 1:
+                    gaps = [lens[i] - lens[i + 1] for i in range(len(lens) - 1)]
+                    gi = int(max(range(len(gaps)), key=lambda i: gaps[i]))
+                    if gaps[gi] >= 0.35 * lens[0]:
+                        fin = fin[:max(gi + 1, 1)]
+                keep = fin + ess
+        out[d] = keep
+    return out
+
+
+def _shell_facts(X: np.ndarray, rms_tol: float = 0.20,
+                 k_nn: int = 4) -> dict[str, object] | None:
+    """GEOMETRIC recognition of a round shell: are all points (almost) equidistant from
+    the centroid? If yes, estimate the tangent dimension k by counting the substantial
+    singular values of local k-NN patches (k_nn=4, a tight patch: enough to see the
+    tangent plane, small enough not to be swamped by the curvature of a sphere sample).
+    Returns raw facts only -- whether the shell is a sphere or a torus-like
+    hypersurface is decided with the prominent Betti (a sphere has no H_1, a T^k has k)."""
+    n, d = X.shape
+    if n < k_nn + 2 or d < 2:
+        return None
+    c = X - X.mean(0)
+    r = np.linalg.norm(c, axis=1)
+    R = float(r.mean())
+    if R < 1e-9:
+        return None
+    rms = float(np.sqrt(((r - R) ** 2).mean()) / R)
+    if rms > rms_tol:
+        return None
+    D = pairwise_distances(X, "euclidean")
+    np.fill_diagonal(D, np.inf)
+    idx = np.argsort(D, axis=1)[:, :k_nn]
+    dims: list[int] = []
+    for i in range(n):
+        V = c[idx[i]] - c[i]
+        s = np.linalg.svd(V, compute_uv=False)
+        dims.append(int((s > 0.15 * s[0]).sum()))
+    return {"round": True, "R": R, "rms": rms, "tangent": int(np.median(dims))}
+
+
+def _struct_at(bc: Barcode, eps_grid: np.ndarray, maxdim: int,
+               top_claimable: bool) -> list[list[int]]:
+    """Prominent-Betti 'structure rows' at every slider grid point: which prominent
+    classes are ALIVE there. The top dim is claimed only when the complex is exact."""
+    prom = _prominent_intervals(bc, float(eps_grid[-1]), maxdim,
+                                top_claimable=top_claimable)
+    rows: list[list[int]] = []
+    for e in eps_grid:
+        rows.append([sum(1 for iv in prom.get(d, []) if iv.alive_at(float(e)))
+                     for d in range(maxdim + 1)])
+    return rows
 
 
 def build_layer_trajectory(args: argparse.Namespace) -> dict[str, object]:
@@ -802,6 +1378,32 @@ def build_layer_trajectory(args: argparse.Namespace) -> dict[str, object]:
     except Exception:
         ptexts = [str(order[g]) for g in range(len(order))]
 
+    # ATTRACTOR DETECTION (per sampled layer): each layer is one time step of the system,
+    # so a Betti fingerprint per layer + the layer-to-layer changes are read against the
+    # dynamics catalogue (fixed points / limit cycles / tori / Lorenz-type / basin
+    # networks / bifurcation signatures). Hypotheses only -- see the W-caveats below.
+    try:
+        strided = layers[::max(1, len(layers) // 12)]
+        dyn_rows: dict[int, list[int]] = {}
+        for L in strided:
+            i = layers.index(L)
+            dyn_rows[int(L)] = _cloud_dynamics_fingerprint(traj[i])
+        all_L: list[int] = list(dyn_rows.keys())
+        dyn_messages: dict[int, str] = {
+            int(L): _dynamics_name(r) for L, r in dyn_rows.items()}
+        dyn_closest: dict[int, list[dict[str, object]]] = {
+            int(L): _closest_dynamics(r) for L, r in dyn_rows.items()}
+        dyn_transitions: dict[int, str] = {}
+        for a, b in zip(all_L[:-1], all_L[1:]):
+            dyn_transitions[int(b)] = _dynamics_transition(
+                dyn_rows[a], dyn_rows[b])
+        # a whole-trajectory "attractor-set" probe on a downsampled union of the shared frame
+        union = np.vstack([traj[layers.index(L)][:: max(1, ntok // 30)] for L in strided])
+        global_betti = _cloud_dynamics_fingerprint(union, sub=120)
+        dyn_global = _dynamics_name(global_betti)
+    except Exception:
+        dyn_messages, dyn_closest, dyn_transitions, dyn_global = {}, {}, {}, ""
+
     title = args.title or "Token trajectories across layers"
     sub = (f"layers {layers[0]}…{layers[-1]} ({len(layers)} steps)  ·  {ntok} tokens in a shared "
            f"3D PCA frame  ·  each layer = one time step  ·  drag to rotate")
@@ -817,6 +1419,11 @@ def build_layer_trajectory(args: argparse.Namespace) -> dict[str, object]:
         "spread": [round(float(v), 3) for v in spread],
         "group_of": group_of,
         "prompt_labels": ptexts,
+        "dyn_messages": dyn_messages,
+        "dyn_rows": {int(L): [int(v) for v in r] for L, r in dyn_rows.items()},
+        "dyn_closest": dyn_closest,
+        "dyn_transitions": dyn_transitions,
+        "dyn_global": dyn_global,
     }
 
 
@@ -864,7 +1471,9 @@ TEMPLATE = r"""<!DOCTYPE html>
   input[type=range] { flex: 1; min-width: 160px; accent-color: #4ea1ff; }
   #eps-readout { font-variant-numeric: tabular-nums; font-size: 13px; color: var(--mut); min-width: 130px; }
   .toggle { display:flex; align-items:center; gap:5px; font-size: 12.5px; color: var(--mut); cursor:pointer; user-select:none; }
-  #badge { font-size: 12px; color:#2ea043; font-weight:650; }
+  #badge { font-size: 11.5px; color:#2ea043; font-weight:650; }
+  #dynbadge { font-size: 11.5px; color:#d39b52; font-weight:600; margin-left: 10px; }
+  .card.match { background:#10251a; }
   #legend { display:flex; flex-wrap:wrap; gap:6px 12px; font-size:11.5px; color:var(--mut); }
   #legend .dot { width:10px; height:10px; }
   #errbox { display:none; position:fixed; left:16px; right:16px; bottom:14px; z-index:1000;
@@ -888,7 +1497,7 @@ TEMPLATE = r"""<!DOCTYPE html>
     <div id="right">
       <div id="cards"></div>
       <div class="panel" id="p-bfun">
-        <h3>Betti numbers over ε &nbsp;<span id="badge"></span></h3>
+        <h3>Betti numbers over ε &nbsp;<span id="badge"></span><span id="dynbadge"></span></h3>
         <canvas id="bfun" height="150"></canvas>
       </div>
       <div class="panel" id="p-diag">
@@ -997,7 +1606,7 @@ function fit(c){
 }
 function fitAll(){
   fit(scene); fit(bfun); fit(diag); fit(conv);
-  if (MODE !== "filtration"){ document.getElementById("p-bfun").style.display="none"; document.getElementById("p-diag").style.display="none"; }
+  if (MODE !== "filtration"){ document.getElementById("p-diag").style.display="none"; }
   if (MODE !== "trajectory"){ document.getElementById("p-conv").style.display="none"; document.getElementById("p-legend").style.display="none"; }
 }
 window.addEventListener("resize", () => { fitAll(); render(); });
@@ -1246,7 +1855,39 @@ function renderBfun(){
   bctx.restore();
 }
 
-// ---- convergence (spread over depth) -------------------------------------
+// Betti-rows of each trajectory layer we checked, drawn as colored bars (dynamics
+// fingerprint per depth). The cursor shows the current layer.
+function renderBfunTraj(){
+  const dpr = window.devicePixelRatio || 1, w = bfun.width/dpr, h = bfun.height/dpr;
+  bctx.save(); bctx.scale(dpr, dpr);
+  bctx.clearRect(0,0,w,h);
+  const rows = DATA.dyn_rows || {};
+  const Ls = Object.keys(rows).map(Number).sort((a,b)=>a-b);
+  const D = Math.max(1, ...Ls.map(L=>rows[L].length));
+  const m = 22, pw = w-m-8, ph = h-16-8;
+  bctx.strokeStyle="#3a4553"; bctx.strokeRect(m,8,pw,ph);
+  const cw = pw/Math.max(1,Ls.length);
+  let maxB = 1; for (const L of Ls) for (const v of rows[L]) if (v>maxB) maxB=v;
+  for (const L of Ls){
+    const x = m + Ls.indexOf(L)*cw;
+    for (let d=0; d<rows[L].length; d++){
+      bctx.fillStyle = DIM_COLOR[d];
+      const bh = (rows[L][d]/maxB)*ph;
+      bctx.fillRect(x+2+d*cw*0.28, 8+ph-bh, cw*0.24, bh);
+    }
+  }
+  const li = Math.max(0, Math.min(N_L-1, Math.round(t)));
+  const cx = m + (li/Math.max(1,N_L-1))*pw;
+  bctx.strokeStyle="#e6edf3"; bctx.globalAlpha=0.6; bctx.beginPath();
+  bctx.moveTo(cx,8); bctx.lineTo(cx,8+ph); bctx.stroke(); bctx.globalAlpha=1;
+  let lx = m+6;
+  for (let d=0; d<Math.max(1,...Ls.map(L=>rows[L].length)); d++){
+    bctx.fillStyle = DIM_COLOR[d]; bctx.fillRect(lx, h-6, 9, 3);
+    bctx.fillStyle="#8b98a9"; bctx.font="10px system-ui";
+    bctx.fillText("β"+d, lx+11, h-1); lx += 34;
+  }
+  bctx.restore();
+}
 function renderConv(){
   const dpr = window.devicePixelRatio || 1;
   const w = conv.width/dpr, h = conv.height/dpr;
@@ -1329,9 +1970,25 @@ function updateCards(){
       cardNums[d].style.color = DIM_COLOR[d];
     }
     const badge = document.getElementById("badge");
+    const dynBadge = document.getElementById("dynbadge");
+    const ki = Math.max(0, Math.min((DATA.struct_rows || []).length - 1,
+                                    Math.round(eps / EMAX * ((DATA.struct_rows || []).length - 1))));
+    const firstClause = (s) => {
+      if (!s) return "";
+      const cut = Math.min(s.indexOf(":"), s.indexOf(";"), s.indexOf("("), s.length);
+      const seg = cut > 0 ? s.slice(0, cut) : s;
+      return seg.slice(0, 140);
+    };
+    const featOK = DATA.target ? DATA.feat_row.slice(0, DATA.target.length)
+          .every((v, i) => v === DATA.target[i]) : false;
+    const atEps = (DATA.topo_messages && DATA.topo_messages[ki]) || "";
+    badge.textContent = (featOK ? "✓ " : "") + firstClause(atEps);
+    badge.title = "Topology (persistent structure): " + DATA.topo_feature +
+                  "\nFeature β = [" + DATA.feat_row.join(", ") + "]";
+    dynBadge.textContent = firstClause(DATA.dyn_feature);
+    dynBadge.title = "Dynamics hypothesis: " + DATA.dyn_feature;
     if (DATA.target){
       const m = b.slice(0, DATA.target.length).every((v,i)=>v===DATA.target[i]);
-      badge.textContent = m ? "✓ matches expected topology" : "";
       for (let d=0; d<=MD; d++) document.querySelectorAll(".card")[d].classList.toggle("match", m);
       // Guardrail: at the top of the slider the computed Betti vector MUST equal the
       // declared target (e.g. a rebuilt exact T^2 must read [1,2,1]). A mismatch is a
@@ -1351,17 +2008,29 @@ function updateCards(){
         mismatchShown = false;
         hideError();
       }
-    } else badge.textContent = "";
+    }
   } else {
     const li = Math.max(0, Math.min(N_L-1, Math.round(t)));
     const ln = document.getElementById("layer-num"); if (ln) ln.textContent = DATA.layers[li] + "  /  " + DATA.layers[N_L-1];
     const tn = document.getElementById("tok-num"); if (tn) tn.textContent = N_TOK;
+    const badge = document.getElementById("badge");
+    const dynBadge = document.getElementById("dynbadge");
+    const L = DATA.layers[li];
+    const msg = (DATA.dyn_messages && DATA.dyn_messages[L]) || "";
+    const tr = (DATA.dyn_transitions && DATA.dyn_transitions[L]) || "";
+    if (badge) badge.textContent = msg ? msg.split(":").pop().split("(")[0].trim().slice(0, 120) : "";
+    if (badge) badge.title = "Dynamics at layer " + L + ":\n" + msg;
+    if (dynBadge){
+      dynBadge.textContent = tr ? ("⇥ " + tr.slice(0, 90)) : "";
+      dynBadge.title = "Bifurcation into layer " + L + ":\n" + tr +
+        (DATA.dyn_global ? "\n\nWhole-trajectory attractor-set guess:\n" + DATA.dyn_global : "");
+    }
   }
 }
 
 function render(){
   computeFit();
-  if (MODE === "trajectory"){ renderTrajScene(); renderConv(); }
+  if (MODE === "trajectory"){ renderTrajScene(); renderConv(); renderBfunTraj(); }
   else { renderScene(); renderDiagram(); renderBfun(); }
   updateCards();
   const ro = document.getElementById("eps-readout");

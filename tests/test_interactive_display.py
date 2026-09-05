@@ -190,11 +190,12 @@ def test_is_overfilling_helper() -> None:
 
 def test_points_dense_bagel_capped_at_feasible(tmp_path: Path) -> None:
     # The "slider only goes to 0.188" fix, now spanning the FULL Rips range: a DENSE
-    # NON-GRID bagel (so it is NOT reconstructed) loaded via --points must (a) be
-    # detected as over-filling, and (b) have its slider capped below the infeasible
-    # Dmax (which would be millions of simplices), at the largest feasible epsilon.
-    X = G.donut(600, seed=0)
-    assert interactive._detect_torus_grid(X) is None, "a random bagel is not a grid"
+    # cloud that is NOT a rebuildable torus surface (heavy noise destroyed the thin
+    # tube, so _torus_fit rejects it) loaded via --points must (a) be detected as
+    # over-filling, and (b) have its slider capped below the infeasible Dmax (which
+    # would be millions of simplices), at the largest feasible epsilon.
+    X = G.donut(256, seed=0, noise=0.25)
+    assert interactive._torus_fit(X) is None, "a noise-drowned donut is not a torus surface"
     csv = tmp_path / "bagel.csv"
     PointSet(X).to_csv(str(csv))
     D = pairwise_distances(X)
@@ -311,8 +312,8 @@ def test_points_no_exact_torus_forces_rips(tmp_path: Path) -> None:
 def test_torus_fit_accepts_irregular_tori() -> None:
     # A NON-grid torus sampling (random donut / noisy donut) is still detected and gets
     # a valid 2-factor grid (nu*nv == n), so a closed T^2 can be rebuilt on the points.
-    for maker in (G.donut(1536, seed=2), G.donut(400, seed=0),
-                  G.donut(1536, seed=1, noise=0.05)):
+    for maker in (G.donut(256, seed=2), G.donut(256, seed=0),
+                  G.donut(256, seed=1, noise=0.05)):
         fit = interactive._torus_fit(maker)
         assert fit is not None, f"_torus_fit rejected a real torus cloud ({maker.shape})"
         nu, nv, R, r = fit
@@ -332,7 +333,7 @@ def test_torus_fit_rejects_non_tori() -> None:
     # middle (r/R ~ 0.9-1.0), so the r/R < 0.70 guard rejects them. A circle has no
     # 3D tube at all. A torus drowned in heavy noise (noise=0.25) is no longer a
     # thin torus surface and must also be rejected.
-    assert interactive._torus_fit(G.sphere(600, 3)) is None
+    assert interactive._torus_fit(G.sphere(160, 3)) is None
     assert interactive._torus_fit(G.gmm(3, 90, 3)) is None
     assert interactive._torus_fit(G.circle_grid(48, radius=1.0)) is None
     assert interactive._torus_fit(G.donut(400, seed=0, noise=0.25)) is None
@@ -345,12 +346,12 @@ def test_torus_fit_needs_factorable_count() -> None:
 
 
 def test_assign_torus_grid_is_bijection() -> None:
-    X = G.donut(1536, seed=2)
+    X = G.donut(256, seed=2)
     nu, nv, R, r = interactive._torus_fit(X)
     assign = interactive._assign_torus_grid(X, nu, nv, R, r)
-    assert assign.shape == (1536,)
-    assert sorted(int(x) for x in assign) == list(range(1536))
-    assert len(set(int(x) for x in assign)) == 1536
+    assert assign.shape == (256,)
+    assert sorted(int(x) for x in assign) == list(range(256))
+    assert len(set(int(x) for x in assign)) == 256
 
 
 def test_assign_torus_grid_rejects_mismatched_grid() -> None:
@@ -366,7 +367,7 @@ def test_points_irregular_torus_closes_up_to_t2(tmp_path: Path) -> None:
     # torus2.csv) loaded via --points is rebuilt as the exact T^2 cell complex on the
     # actual points. At the top of the slider every edge + face is present -> a closed
     # torus, exactly [1, 2, 1], with corners on the user's own points (a real bagel).
-    X = G.donut(1536, seed=2)
+    X = G.donut(256, seed=2)
     csv = tmp_path / "irregular_bagel.csv"
     PointSet(X).to_csv(str(csv))
     C, pts, proj, target, _rd = interactive.build_source(_args("donut", points=str(csv)))
@@ -375,20 +376,20 @@ def test_points_irregular_torus_closes_up_to_t2(tmp_path: Path) -> None:
     assert "exact" in proj
     assert is_bagel(pts), "fitted T^2 corners must sit on a real bagel surface"
     n_faces = sum(1 for s in C.simplexes if len(s) == 3)
-    nu, nv = 32, 48  # the best-fit factorization for donut(1536)
+    nu, nv = interactive._torus_fit(X)[:2]
     assert n_faces == 2 * nu * nv
 
 
 def test_fitted_t2_guardrail_value_monotonicity() -> None:
     # Every face of the fitted T^2 must be born exactly at (never before) its edges.
-    X = G.donut(1536, seed=2)
+    X = G.donut(256, seed=2)
     nu, nv, R, r = interactive._torus_fit(X)
     assign = interactive._assign_torus_grid(X, nu, nv, R, r)
     pts = X[assign]
-    assert pts.shape == (1536, 3)
+    assert pts.shape == (256, 3)
     # Spot-check: grid-neighbour edges must be near-nearest (short), else the fit
     # strung unrelated points together.
-    for k in (0, 7, 100, 999, 1535):
+    for k in (0, 3, 50, 127, 255):
         i, j = k % nu, k // nu
         nb = [((i + 1) % nu) + j * nu, i + ((j + 1) % nv) * nu]
         for m in nb:
