@@ -139,18 +139,37 @@ def test_product_torus3_displays_3d_and_low_dims_exact() -> None:
 
 
 # --------------------------------------------------------------------------- #
-# The epsilon slider must reach a fully-connected complex (the "only points /
-# beta_0=24" bug: the old slider stopped at frac*nn, far short of connectivity)
+# The donut: clean exact T^2 (default) vs honest full-range Rips (donut-rips)
 # --------------------------------------------------------------------------- #
-def test_slider_reaches_full_connectivity() -> None:
-    C, *_ = interactive.build_source(_args("donut"))  # donut_grid(16,16), a coarse 2D cloud
-    b = betti_at(C, float(C.values.max()))
-    assert b[0] == 1, f"complex not fully connected at eps_max: beta_0={b[0]}"
-    # and the slider bound is at least the connectivity threshold
-    from vrtda import pairwise_distances
-    X = G.donut_grid(16, 16)
+def test_donut_exact_clean_torus() -> None:
+    # --shape donut is the exact T^2 cell complex (NOT Rips): a clean bagel that
+    # reads exactly [1, 2, 1] at the top of the slider and builds instantly.
+    C, pts, _proj, target, _rd = interactive.build_source(_args("donut", nper=16))
+    assert pts.shape[1] == 3
+    assert is_bagel(pts), "donut display must be a ring (inner + outer)"
+    assert target == [1, 2, 1]
+    assert betti_at(C, float(C.values.max()))[:3] == [1, 2, 1]
+
+
+def test_donut_matches_torus_grid_topology() -> None:
+    # donut and torus-grid share the exact T^2 engine -> identical topology at the top
+    Cd, *_ = interactive.build_source(_args("donut", nper=8))
+    Ct, *_ = interactive.build_source(_args("torus-grid", n=8))
+    assert betti_at(Cd, float(Cd.values.max()))[:3] == [1, 2, 1]
+    assert betti_at(Ct, float(Ct.values.max()))[:3] == [1, 2, 1]
+
+
+def test_donut_rips_full_range_overfills() -> None:
+    # --shape donut-rips is honest Rips over the FULL range eps 0 -> max pairwise
+    # distance: the slider reaches Dmax and the complex is fully connected there
+    # (beta_0 = 1), but the bagel over-fills so the clean beta_1 = 2 is NOT read.
+    C, *_ = interactive.build_source(_args("donut-rips", nper=8))
+    X = G.donut_grid(8, 8)
     D = pairwise_distances(X)
-    assert float(C.values.max()) >= interactive._connectivity_threshold(D)
+    assert abs(float(C.values.max()) - float(D.max())) < 1e-9, "slider must reach max distance"
+    b = betti_at(C, float(C.values.max()))
+    assert b[0] == 1, f"not fully connected at max distance: beta_0={b[0]}"
+    assert b[1] != 2, "over-filled Rips bagel should not read a clean beta_1 = 2"
 
 
 def test_connectivity_threshold_matches_components() -> None:

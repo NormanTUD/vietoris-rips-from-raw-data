@@ -92,4 +92,27 @@ def test_persistence_is_deterministic() -> None:
     assert [iv.as_tuple() for iv in b1.intervals] == [iv.as_tuple() for iv in b2.intervals]
 
 
+def test_betti_function_matches_betti_at() -> None:
+    # The vectorised betti_function (birth <= eps < death, over the barcode) must agree
+    # with the per-epsilon betti_at on a range of epsilons, including beyond eps_max.
+    from vrtda.complexes import make_torus_grid_complex
+    for C in (triangle_cycle(), make_torus_grid_complex(2, (3, 3))):
+        bc = persistent_homology(C)
+        emax = float(C.values.max())
+        grid = [emax * f for f in (0.0, 0.25, 0.5, 0.75, 1.0, 1.5)]
+        table = bc.betti_function(grid)
+        for r, e in enumerate(grid):
+            assert list(table[r]) == bc.betti_at(e), f"betti_function != betti_at at eps={e}"
+
+
+def test_persistent_homology_progress_cb() -> None:
+    from vrtda.complexes import make_torus_grid_complex
+    C = make_torus_grid_complex(2, (3, 3))
+    calls: list[tuple[int, int]] = []
+    bc = persistent_homology(C, progress_cb=lambda j, n: calls.append((j, n)))
+    assert calls, "progress callback never fired"
+    assert calls[-1] == (C.n_simplices - 1, C.n_simplices)
+    assert bc.max_dim() >= 2
+
+
 beartype_module(__name__)
