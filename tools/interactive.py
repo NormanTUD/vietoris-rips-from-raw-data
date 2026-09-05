@@ -442,6 +442,7 @@ TEMPLATE = r"""<!DOCTYPE html>
         <div class="toggle"><input type="checkbox" id="t-points" checked><label for="t-points">Points</label></div>
         <div class="toggle"><input type="checkbox" id="t-edges" checked><label for="t-edges">Edges (H¹)</label></div>
         <div class="toggle"><input type="checkbox" id="t-faces" checked><label for="t-faces">Faces (fill, H²)</label></div>
+        <div class="toggle"><input type="checkbox" id="t-shade" checked><label for="t-shade">Shade (3D depth)</label></div>
       </div>
       <div class="panel" id="p-legend" style="display:none">
         <h3>Prompts</h3>
@@ -475,7 +476,7 @@ const N_TOK = DATA.n_tokens || 0;
 const GROUP = DATA.group_of || [];
 
 let rx = -0.45, ry = 0.7, eps = 0, t = 0, playing = false, raf = null, lastT = 0;
-let showPoints = true, showEdges = true, showFaces = true;
+let showPoints = true, showEdges = true, showFaces = true, shade = true;
 let fitR = 1.0;
 
 const scene = document.getElementById("scene"), sctx = scene.getContext("2d");
@@ -562,6 +563,23 @@ function colormap(t){
   return STOPS[STOPS.length-1][1];
 }
 const rgba=(c,a)=>`rgba(${c[0]|0},${c[1]|0},${c[2]|0},${a==null?1:a})`;
+const _ll=Math.hypot(-0.45,0.5,0.74);
+const LIGHT=[-0.45/_ll,0.5/_ll,0.74/_ll];
+function shadeColor(a,b,c,base,fitR){
+  // two-sided Lambert lighting + a front-to-back depth cue, so the 3D shape reads
+  // without having to rotate: near faces are brighter, the light gives each patch a
+  // normal-based tone, and far faces recede.
+  let nx=(b[1]-a[1])*(c[2]-a[2])-(b[2]-a[2])*(c[1]-a[1]);
+  let ny=(b[2]-a[2])*(c[0]-a[0])-(b[0]-a[0])*(c[2]-a[2]);
+  let nz=(b[0]-a[0])*(c[1]-a[1])-(b[1]-a[1])*(c[0]-a[0]);
+  const nl=Math.hypot(nx,ny,nz)||1;
+  const lambert=0.55+0.45*Math.abs((nx*LIGHT[0]+ny*LIGHT[1]+nz*LIGHT[2])/nl);
+  const z=(a[2]+b[2]+c[2])/3;
+  const depth=0.5+0.5*((z/fitR+1)/2);
+  const br=depth*lambert;
+  return [base[0]*br, base[1]*br, base[2]*br];
+}
+function depthT(z,fitR){ return 0.5+0.5*((z/fitR+1)/2); }
 const PROMPT_COLORS = ["#4ea1ff","#3fd07a","#ff9f45","#e060c0","#f5d442","#5ad1e6","#ff6b81","#9d7bff","#6bde7f","#e8873a","#7aa2ff","#c9d16a"];
 function groupColor(g){ return PROMPT_COLORS[((g % PROMPT_COLORS.length) + PROMPT_COLORS.length) % PROMPT_COLORS.length]; }
 
@@ -583,20 +601,25 @@ function renderScene(){
       return za-zb;
     });
     for (const f of act){
+      const base = colormap(f[3]/EMAX);
+      const col = shade ? shadeColor(proj[f[0]],proj[f[1]],proj[f[2]],base,fitR) : base;
       sctx.beginPath();
       sctx.moveTo(scr[f[0]][0], scr[f[0]][1]);
       sctx.lineTo(scr[f[1]][0], scr[f[1]][1]);
       sctx.lineTo(scr[f[2]][0], scr[f[2]][1]);
       sctx.closePath();
-      sctx.fillStyle = rgba(colormap(f[3]/EMAX), 0.16);
+      sctx.fillStyle = rgba(col, shade ? 0.6 : 0.16);
       sctx.fill();
+      if (shade){ sctx.strokeStyle = rgba(col, 0.85); sctx.lineWidth = 0.6; sctx.stroke(); }
     }
   }
   if (showEdges){
-    sctx.lineWidth = 1.2;
+    sctx.lineWidth = 1.1;
     for (const e of E){
       if (e[2] > eps) continue;
-      sctx.strokeStyle = rgba(colormap(e[2]/EMAX), 0.9);
+      const z = (proj[e[0]][2]+proj[e[1]][2])/2;
+      const a = shade ? 0.3+0.6*depthT(z,fitR) : 0.9;
+      sctx.strokeStyle = rgba(colormap(e[2]/EMAX), a);
       sctx.beginPath();
       sctx.moveTo(scr[e[0]][0], scr[e[0]][1]);
       sctx.lineTo(scr[e[1]][0], scr[e[1]][1]);
@@ -604,10 +627,12 @@ function renderScene(){
     }
   }
   if (showPoints){
-    sctx.fillStyle = "#e6edf3";
     for (let i=0;i<P.length;i++){
+      const dpt = depthT(proj[i][2], fitR);
+      const r = shade ? (1.3+1.4*dpt) : 2.0;
+      sctx.fillStyle = rgba([235,241,247], shade ? 0.4+0.6*dpt : 1);
       sctx.beginPath();
-      sctx.arc(scr[i][0], scr[i][1], 2.0, 0, Math.PI*2);
+      sctx.arc(scr[i][0], scr[i][1], r, 0, Math.PI*2);
       sctx.fill();
     }
   }
@@ -823,6 +848,7 @@ document.getElementById("resetview").addEventListener("click", () => { rx=-0.45;
 document.getElementById("t-points").addEventListener("change", e=>{showPoints=e.target.checked; render();});
 document.getElementById("t-edges").addEventListener("change", e=>{showEdges=e.target.checked; render();});
 document.getElementById("t-faces").addEventListener("change", e=>{showFaces=e.target.checked; render();});
+document.getElementById("t-shade").addEventListener("change", e=>{shade=e.target.checked; render();});
 
 // drag to rotate
 let dragging=false, lx=0, ly=0;
