@@ -232,11 +232,20 @@ def build_source(args: argparse.Namespace) -> tuple[FilteredComplex, np.ndarray,
         # Arbitrary point cloud (any ambient dim; PCA-projected if > 3D). The intrinsic
         # dim is unknown, so default to max_dim=3 (guarantees clean H0..H2) and report
         # beta_0..beta_2; raise --max-dim for genuinely higher-dimensional shapes.
+        #
+        # IMPORTANT: a DENSE point cloud (e.g. a 1536-point bagel) makes Vietoris-Rips
+        # over-fill the higher dimensions -- beta_2 explodes and beta_1 shreds into the
+        # grid's short loops (see the note block at the top of this file). We detect it
+        # below (faces/vertex > _OVERFILL_FACE_RATIO) and print overfill_note so the
+        # (artifact) Betti numbers are not mistaken for the true topology.
         X = PointSet.from_csv(args.points, value_cols=args.value_cols, index_cols=args.index_cols).data
         D = pairwise_distances(X, args.metric)
         eps_max = _eps_max(D, args.frac, getattr(args, "connect_margin", 1.2))
         max_dim = max(3, args.max_dim)
         C = _build_rips_safe(X, D, eps_max, max_dim)
+        n_faces = sum(1 for s in C.simplexes if len(s) == 3)
+        if X.shape[0] and n_faces > _OVERFILL_FACE_RATIO * X.shape[0]:
+            _rich_ui.overfill_note(Console(), X.shape[0], n_faces)
         pts, proj = _to3d(X, "rips")
         return C, pts, proj, None, min(max_dim - 1, 3)
 
