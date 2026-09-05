@@ -163,6 +163,42 @@ def _build_rips_safe(X: np.ndarray, D: np.ndarray, eps_max: float, max_dim: int,
             md -= 1
 
 
+# Simplicity/render budget for the --points slider. A dense surface (e.g. a bagel)
+# stops rendering at the connectivity epsilon if we cap there, leaving the view
+# incomplete (missing the outer bulge). We therefore push the slider up to the largest
+# epsilon whose Rips complex stays under these budgets (measured with max_dim=2, since
+# faces drive the browser render). The DEFAULT budget keeps the view snappy; --eps-max
+# lets the user opt into a larger (slower, more complete) complex, capped at the MAX
+# budget. Both sit below the hard infeasibility wall (~300k simplices) where the
+# pure-Python homology and the browser both choke.
+_FEASIBLE_DEFAULT_BUDGET: int = 100_000
+_FEASIBLE_MAX_BUDGET: int = 160_000
+
+
+def _max_feasible_eps(X: np.ndarray, D: np.ndarray, start_eps: float,
+                      budget: int, max_mult: float = 8.0, steps: int = 8) -> float:
+    """SAFEGUARD (feasibility): the largest eps in [start_eps, start_eps*max_mult] at
+    which build_rips(max_dim=2) keeps <= budget simplices. Coarse geometric scan (no
+    homology) so it is cheap. Returns start_eps if even it exceeds the budget. This is
+    what caps the --points slider so pushing epsilon past the feasibility wall never
+    crashes -- it is capped and reported instead."""
+    best = start_eps
+    cur = start_eps
+    for _ in range(steps):
+        nxt = cur * 1.3
+        if nxt > start_eps * max_mult:
+            break
+        try:
+            probe = build_rips(X, D, nxt, max_dim=2)
+        except TooLargeError:
+            break
+        if probe.n_simplices <= budget:
+            best, cur = float(nxt), float(nxt)
+        else:
+            break
+    return best
+
+
 def _pca3(X: np.ndarray) -> np.ndarray:
     Xc = X - X.mean(0)
     _u, _s, Vt = np.linalg.svd(Xc, full_matrices=False)
@@ -257,12 +293,34 @@ def build_source(args: argparse.Namespace) -> tuple[FilteredComplex, np.ndarray,
         # (artifact) Betti numbers are not mistaken for the true topology.
         X = PointSet.from_csv(args.points, value_cols=args.value_cols, index_cols=args.index_cols).data
         D = pairwise_distances(X, args.metric)
-        eps_max = _eps_max(D, args.frac, getattr(args, "connect_margin", 1.2))
+        console = Console()
+        eps_auto = _eps_max(D, args.frac, getattr(args, "connect_margin", 1.2))
         max_dim = max(3, args.max_dim)
-        C = _build_rips_safe(X, D, eps_max, max_dim)
+        # Build once at the fast, connected baseline and check for over-filling.
+        C = _build_rips_safe(X, D, eps_auto, max_dim)
         n_faces = sum(1 for s in C.simplexes if len(s) == 3)
-        if _is_overfilling(X.shape[0], n_faces):
-            _rich_ui.overfill_note(Console(), X.shape[0], n_faces)
+        overfill = _is_overfilling(X.shape[0], n_faces)
+
+        # Decide the slider's upper bound (the "only goes to 0.188" fix):
+        #  - --eps-max N  : honour the user's request, capped at the feasibility wall.
+        #  - dense surface (over-fill) : auto-raise past connectivity to the largest
+        #    default-budget feasible eps so the view renders as completely as it can.
+        #  - otherwise      : the fast, connected baseline.
+        if args.eps_max is not None:
+            eps_max = min(float(args.eps_max), _max_feasible_eps(X, D, eps_auto, budget=_FEASIBLE_MAX_BUDGET))
+            if eps_max < float(args.eps_max) - 1e-9:
+                console.print(f"[yellow]NOTE: --eps-max {float(args.eps_max):.3f} exceeds the feasible "
+                              f"limit for this cloud; capping the slider at {eps_max:.3f}.[/yellow]")
+        elif overfill:
+            eps_max = _max_feasible_eps(X, D, eps_auto, budget=_FEASIBLE_DEFAULT_BUDGET)
+            if eps_max > eps_auto + 1e-9:
+                C = _build_rips_safe(X, D, eps_max, max_dim)
+                n_faces = sum(1 for s in C.simplexes if len(s) == 3)
+        else:
+            eps_max = eps_auto
+
+        if overfill:
+            _rich_ui.overfill_note(console, X.shape[0], n_faces)
         pts, proj = _to3d(X, "rips")
         return C, pts, proj, None, min(max_dim - 1, 3)
 
@@ -1055,6 +1113,11 @@ def main() -> int:
     p.add_argument("--nper", type=int, default=10, help="points per circle (donut/product grids)")
     p.add_argument("--k", type=int, default=2, help="ambient dim for product/sphere")
     p.add_argument("--frac", type=float, default=1.6, help="Rips: eps_max as a fraction of mean nearest-neighbour distance")
+    p.add_argument("--eps-max", type=float, default=None,
+                   help="force the slider's max epsilon. Default: auto (connected for sparse "
+                        "clouds; auto-raised to the largest feasible epsilon for dense surfaces). "
+                        "Raise it toward the surface-completion scale to render a denser surface "
+                        "more completely; it is capped at the feasible limit.")
     p.add_argument("--connect-margin", type=float, default=1.2,
                    help="slider reaches at least this many x the connectivity threshold, so at max "
                         "epsilon all points form one connected complex (default 1.2). Use 0 to disable.")
