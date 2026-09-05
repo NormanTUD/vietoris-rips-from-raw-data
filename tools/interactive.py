@@ -211,43 +211,22 @@ def build_source(args: argparse.Namespace) -> tuple[FilteredComplex, np.ndarray,
         return C, pts, proj, None, min(max_dim - 1, 3)
 
     if args.shape == "torus-grid":
-        nu = args.n
-        C = make_torus_grid_complex(2, (nu, nu))
-        simps = list(C.simplexes)
-
-        def i_of(j: int) -> int:
-            return j % nu
-
-        vals = []
-        for s in simps:
-            d = len(s) - 1
-            if d == 0:
-                vals.append(0.0)
-            elif d == 1:
-                ph = (i_of(s[0]) + i_of(s[1])) / 2.0 / nu
-                vals.append(1.0 + 0.8 * ph)
-            else:
-                ph = (i_of(s[0]) + i_of(s[1]) + i_of(s[2])) / 3.0 / nu
-                vals.append(2.0 + 0.8 * ph)
-        C = FilteredComplex(
-            simps, np.array(vals, dtype=np.float64),
-            np.array([len(s) - 1 for s in simps], dtype=np.int64), "torus_grad",
-            {"nu": nu, "nv": nu},
-        )
-        pts = _torus_surface(nu, nu)
-        return C, pts, "torus-grid surface (exact T^2 cell complex)", [1, 2, 1], int(C.max_dim())
+        return _exact_torus2(args.n, "torus_grad", "torus-grid surface (exact T^2 cell complex)")
 
     if args.shape == "donut":
-        # Real Vietoris-Rips on a bagel, with the slider spanning the FULL range
-        # eps 0 -> max pairwise distance. Building the whole 2-skeleton is fine, but
-        # its persistent homology is pure-Python and slow, so cap the grid at a size
-        # whose full-range build is snappy (~8x8 ~ a few seconds; 10x10 ~ a minute;
-        # 16x16 is many minutes). At max distance the bagel over-fills (the holes get
-        # triangulated away -> beta_1 drops, beta_2 blows up); the clean torus
-        # (beta_1 = 2) shows at an intermediate epsilon on the way up.
+        # The clean bagel: exact T^2 cell complex (fast, beta = [1,2,1] at the top,
+        # both rings visible). This is the shape to use to SEE a torus. The Rips
+        # version (--shape donut-rips) is kept for watching Rips in action.
+        return _exact_torus2(max(args.nper, 8), "donut", "donut / bagel (exact T^2 cell complex)")
+
+    if args.shape == "donut-rips":
+        # Real Vietoris-Rips on a bagel, slider over the FULL range eps 0 -> max
+        # pairwise distance. A genuine Rips demonstration, but the bagel over-fills:
+        # beta_1 never cleanly reads 2 (it spikes then collapses) and beta_2 blows up
+        # as the holes get triangulated away. Homology is slow, so cap the grid.
         nper = min(args.nper, 8)
         if nper != args.nper:
-            print(f"[donut] full-range Rips homology is slow; capping grid "
+            print(f"[donut-rips] full-range Rips homology is slow; capping grid "
                   f"{args.nper}x{args.nper} -> {nper}x{nper}", file=sys.stderr)
         X = G.donut_grid(nper, nper)
         D = pairwise_distances(X, args.metric)
@@ -1004,8 +983,9 @@ def main() -> int:
                         "or a list '0,16,32,64'. Overrides --shape/--points.")
     p.add_argument("--data-dir", default=None, help="transformer data dir (default: bundled capital_berlin_multilingual)")
     p.add_argument("--shape", default="torus-grid",
-                   choices=["torus-grid", "circle", "donut", "product", "sphere", "blobs"],
-                   help="synthetic source (default: torus-grid = exact T^2)")
+                   choices=["torus-grid", "circle", "donut", "donut-rips", "product", "sphere", "blobs"],
+                   help="synthetic source (default: torus-grid = exact T^2; donut = clean bagel, "
+                        "donut-rips = honest Rips bagel that over-fills)")
     p.add_argument("--points", default=None, help="point-cloud CSV (overrides --shape)")
     p.add_argument("--value-cols", nargs="*", default=None)
     p.add_argument("--index-cols", nargs="*", default=None)
