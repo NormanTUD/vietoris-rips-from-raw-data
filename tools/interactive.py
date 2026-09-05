@@ -170,7 +170,15 @@ def build_source(args: argparse.Namespace) -> tuple[FilteredComplex, np.ndarray,
     # exact cell complex (see tests/test_betti_shapes.py).
     max_dim = min(max(k + 1, 2, args.max_dim), 3)
     C = build_rips(X, D, eps_max, max_dim=max_dim)
-    pts, proj = _to3d(X, "rips")
+    if args.shape == "product" and k == 2:
+        # The R^4 product 2-torus is 4-fold symmetric, so a PCA-3D view collapses to a
+        # bare cylinder. Show the classic bagel instead: donut_grid(n,n) is the exact
+        # same (u_i, v_j) grid (index = i*n + j), so its points pair 1:1 with the
+        # complex vertices while the topology is still computed in the clean R^4 cloud.
+        pts = G.donut_grid(args.nper, args.nper)
+        proj = "2-torus bagel (R³ view) · topology computed in R⁴"
+    else:
+        pts, proj = _to3d(X, "rips")
     return C, pts, proj, target, min(k, 2)
 
 
