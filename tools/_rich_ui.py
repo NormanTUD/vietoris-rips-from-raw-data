@@ -133,10 +133,14 @@ def overfill_note(console: Console, n_points: int, n_faces: int) -> None:
     console.print(
         "[yellow][bold]NOTE — dense point cloud, Rips over-filling:[/bold] "
         f"{n_faces:,} triangles over {n_points:,} points ({per:.1f} per vertex; a clean "
-        "triangulation has ~1.5). The Betti numbers below (huge β₂, β₁ stuck at the grid's "
-        "loop count) are a Rips sampling artifact, NOT the true topology. To see a clean "
-        "low-dim torus use [bold]--shape donut[/bold] (exact T² cell complex); or re-sample "
-        "sparser.[/yellow]"
+        "triangulation has ~1.5). Two consequences, both Rips sampling artifacts, NOT the "
+        "true topology:\n"
+        "   1. β₁ stays stuck at the grid's loop count and β₂ explodes.\n"
+        "   2. the ε slider is capped below the outer surface's formation scale, so the "
+        "3D view is incomplete (missing the outer bulge).\n"
+        "To SEE a clean torus, use the exact T² cell complex (instant, β=[1,2,1]):\n"
+        "   [bold]uv run tools/interactive.py --shape donut --nper 24 --out donut.html[/bold]"
+        "[/yellow]"
     )
 
 

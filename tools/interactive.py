@@ -59,7 +59,7 @@ from rich.progress import Progress
 import _rich_ui
 from vrtda import PointSet, pairwise_distances
 from vrtda.complexes import FilteredComplex, build_rips, make_torus_grid_complex
-from vrtda.errors import TooLargeError
+from vrtda.errors import TooLargeError, VrtdaError
 from vrtda.persistence import persistent_homology
 from vrtda import datasets, generators as G
 from vrtda.beartype_guard import beartype_module
@@ -93,6 +93,14 @@ from vrtda.beartype_guard import beartype_module
 # faces/vertex above which we flag a dense cloud as over-filling (a clean
 # 2-manifold triangulation has ~1.5; over-filled Rips reaches tens).
 _OVERFILL_FACE_RATIO: float = 5.0
+
+
+def _is_overfilling(n_points: int, n_faces: int) -> bool:
+    """SAFEGUARD (load time, testable): True when a Rips 2-skeleton keeps far more
+    triangles per vertex than a clean triangulation (~1.5) -- the signature of a dense
+    manifold point cloud over-filling its higher-dimensional voids. Kept as a pure
+    function so it can be unit-tested without building a complex."""
+    return n_points > 0 and n_faces > _OVERFILL_FACE_RATIO * n_points
 
 
 def _nn(D: np.ndarray) -> float:
@@ -215,6 +223,15 @@ def _exact_torus2(nu: int, kind: str, label: str) -> tuple[FilteredComplex, np.n
         np.array([len(s) - 1 for s in simps], dtype=np.int64), kind, {"nu": nu, "nv": nu},
     )
     pts = _torus_surface(nu, nu)
+    # SAFEGUARD (runtime, reliability): the exact T^2 complex MUST read [1, 2, 1] at the
+    # top of the slider. If a refactor ever changes this, fail loudly instead of
+    # silently showing a wrong torus. The exact complex is small, so this check is cheap.
+    got = persistent_homology(C).betti_at(float(C.values.max()))[:3]
+    if got != [1, 2, 1]:
+        raise VrtdaError(
+            f"internal error: exact T^2 complex (nu={nu}, kind={kind!r}) read beta={got}, "
+            f"expected [1, 2, 1] -- the reliable clean-torus path has regressed."
+        )
     return C, pts, label, [1, 2, 1], int(C.max_dim())
 
 
@@ -244,7 +261,7 @@ def build_source(args: argparse.Namespace) -> tuple[FilteredComplex, np.ndarray,
         max_dim = max(3, args.max_dim)
         C = _build_rips_safe(X, D, eps_max, max_dim)
         n_faces = sum(1 for s in C.simplexes if len(s) == 3)
-        if X.shape[0] and n_faces > _OVERFILL_FACE_RATIO * X.shape[0]:
+        if _is_overfilling(X.shape[0], n_faces):
             _rich_ui.overfill_note(Console(), X.shape[0], n_faces)
         pts, proj = _to3d(X, "rips")
         return C, pts, proj, None, min(max_dim - 1, 3)
