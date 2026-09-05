@@ -214,7 +214,7 @@ def build_source(args: argparse.Namespace) -> tuple[FilteredComplex, np.ndarray,
     elif args.shape == "sphere":
         X = G.sphere(args.n, dim=max(1, args.k - 1), radius=1.0); k = max(1, args.k - 1); target = None
     elif args.shape == "blobs":
-        X = G.gmm(3, args.n, 2); k = 0; target = None
+        X = G.gmm(3, args.n, 3); k = 0; target = None
     else:
         raise SystemExit(f"unknown shape {args.shape!r}")
 
