@@ -1,6 +1,6 @@
 # /// script
 # requires-python = ">=3.10"
-# dependencies = ["numpy>=1.26", "beartype>=0.18"]
+# dependencies = ["numpy>=1.26", "beartype>=0.18", "rich>=13"]
 # ///
 """Compute persistent homology of a point cloud and write barcode + summary CSVs."""
 import argparse
@@ -8,12 +8,17 @@ import sys
 from pathlib import Path
 
 ROOT = str(Path(__file__).resolve().parents[1])
-if ROOT not in sys.path:
-    sys.path.insert(0, ROOT)
+TOOLS = str(Path(__file__).resolve().parent)
+for _p in (ROOT, TOOLS):
+    if _p not in sys.path:
+        sys.path.insert(0, _p)
 
 import numpy as np
 
-from vrtda import PointSet, pairwise_distances, build_rips, persistent_homology
+from rich.console import Console
+
+import _rich_ui
+from vrtda import PointSet, pairwise_distances, build_rips
 from vrtda.barcodes import save_barcode_csv, persistence_summary_csv
 from vrtda.beartype_guard import beartype_module
 
@@ -37,24 +42,28 @@ def main() -> int:
     p.add_argument("--summary-out", default=None, help="optional summary CSV")
     args = p.parse_args()
 
+    console = Console()
+    _rich_ui.params_table(p, args, console)
+
     ps = PointSet.from_csv(args.points, value_cols=args.value_cols, index_cols=args.index_cols)
     D = pairwise_distances(ps.data, args.metric)
     nn = _nn_mean(D)
     eps_max = args.eps_max if args.eps_max is not None else args.frac * nn
 
-    C = build_rips(ps.data, D, eps_max, max_dim=args.max_dim)
-    bc = persistent_homology(C)
+    with _rich_ui.timed(console, f"Building Rips complex (max_dim={args.max_dim})"):
+        C = build_rips(ps.data, D, eps_max, max_dim=args.max_dim)
+    bc = _rich_ui.homology_progress(C, console)
     out = save_barcode_csv(bc, args.out)
-    print(f"wrote {out}")
+    console.print(f"[bold green]wrote[/bold green] {out}")
     if args.summary_out:
         so = persistence_summary_csv(bc, args.summary_out)
-        print(f"wrote {so}")
+        console.print(f"[bold green]wrote[/bold green] {so}")
 
     s = bc.summary()
     per_dim = " ".join(
         f"b{d}={s['dims'][d]['n']} (ess {s['dims'][d]['essential']})" for d in sorted(s["dims"])
     )
-    print(f"n={ps.n} dim={ps.dim} metric={args.metric} eps_max={eps_max:.4g} nsimp={C.n_simplices} | {per_dim}")
+    console.print(f"n={ps.n} dim={ps.dim} metric={args.metric} eps_max={eps_max:.4g} nsimp={C.n_simplices} | {per_dim}")
     return 0
 
 

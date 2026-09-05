@@ -10,7 +10,11 @@ import argparse
 import time
 
 from rich.console import Console
+from rich.progress import Progress
 from rich.table import Table
+
+from vrtda.complexes import FilteredComplex
+from vrtda.persistence import Barcode, persistent_homology
 
 
 def params_table(p: argparse.ArgumentParser, args: argparse.Namespace, console: Console) -> None:
@@ -61,6 +65,53 @@ class timed:
         dt = time.time() - self._t0
         if exc_type is None:
             self.console.print(f"[dim]{self.message} … {dt:.1f}s[/dim]")
+
+
+def homology_progress(complex: FilteredComplex, console: Console,
+                      threshold: int = 30000) -> Barcode:
+    """persistent_homology with a transient rich progress bar when the (pure-Python)
+    reduction is large enough to take a while. Fast complexes run with no UI overhead."""
+    n = complex.n_simplices
+    if n <= threshold:
+        return persistent_homology(complex)
+    with Progress(transient=True, console=console) as progress:
+        task = progress.add_task("persistent homology", total=n)
+
+        def _cb(j: int, _n: int) -> None:
+            progress.update(task, completed=j)
+
+        return persistent_homology(complex, progress_cb=_cb)
+
+
+class progress:
+    """Transient rich progress bar for an item loop.
+
+        with progress(console, "layers", total=8) as advance:
+            for item in items:
+                ...do work...
+                advance()
+    """
+
+    def __init__(self, console: Console, description: str, total: int) -> None:
+        self.console = console
+        self.description = description
+        self.total = int(total)
+        self._prog: Progress | None = None
+        self._task: object = None
+
+    def __enter__(self) -> "progress":
+        self._prog = Progress(transient=True, console=self.console)
+        self._task = self._prog.add_task(self.description, total=self.total)
+        self._prog.start()
+        return self
+
+    def advance(self, n: int = 1) -> None:
+        if self._prog is not None and self._task is not None:
+            self._prog.update(self._task, advance=int(n))
+
+    def __exit__(self, exc_type: object, exc: object, tb: object) -> None:
+        if self._prog is not None:
+            self._prog.stop()
 
 
 from vrtda.beartype_guard import beartype_module as _beartype_module

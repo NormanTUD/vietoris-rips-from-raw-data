@@ -1,6 +1,6 @@
 # /// script
 # requires-python = ">=3.10"
-# dependencies = ["numpy>=1.26", "beartype>=0.18"]
+# dependencies = ["numpy>=1.26", "beartype>=0.18", "rich>=13"]
 # ///
 """Generate a ground-truth bouquet (wedge) of n k-spheres for TDA validation.
 
@@ -14,11 +14,16 @@ import sys
 from pathlib import Path
 
 ROOT = str(Path(__file__).resolve().parents[1])
-if ROOT not in sys.path:
-    sys.path.insert(0, ROOT)
+TOOLS = str(Path(__file__).resolve().parent)
+for _p in (ROOT, TOOLS):
+    if _p not in sys.path:
+        sys.path.insert(0, _p)
 
 import numpy as np
 
+from rich.console import Console
+
+import _rich_ui
 from vrtda import PointSet, generators as G
 from vrtda import pairwise_distances, build_rips, persistent_homology, betti_at
 from vrtda.complexes import make_bouquet_complex
@@ -54,22 +59,27 @@ def _apply_randomizer(data: np.ndarray, args: argparse.Namespace) -> np.ndarray:
     return data + rng.normal(0.0, args.randomizer * args.radius, data.shape)
 
 
-def verify(n: int, k: int, cloud: np.ndarray | None, randomizer: float = 0.0) -> None:
+def verify(n: int, k: int, cloud: np.ndarray | None, randomizer: float = 0.0,
+           console: Console | None = None) -> None:
+    c = console or Console()
     expected = _expected_betti(n, k)
-    print(f"verify: bouquet of {n} S^{k} expected beta = {expected}")
-    C = make_bouquet_complex(n, k)
-    exact = betti_at(C, float(C.values.max()))
-    print(f"  exact complex beta = {exact}")
-    assert exact == expected, f"exact complex beta {exact} != expected {expected}"
+    rows: list[tuple[str, str]] = [("expected", _rich_ui.fmt_betti(expected))]
+    with _rich_ui.timed(c, f"Building exact bouquet of {n} S^{k} + homology"):
+        C = make_bouquet_complex(n, k)
+        exact = betti_at(C, float(C.values.max()))
+    ok = exact == expected
+    rows.append(("exact complex", _rich_ui.fmt_betti(exact) + ("  [green]✓[/green]" if ok else "  [red]✗[/red]")))
+    assert ok, f"exact complex beta {exact} != expected {expected}"
     if randomizer > 0.0:
-        print("  (rips-on-cloud skipped: the cloud is jittered via --randomizer)")
-        print(f"  OK: bouquet topology verified (exact complex)")
-        return
-    if k == 1 and cloud is not None:
+        rows.append(("rips-on-cloud", "(skipped: --randomizer jitter)"))
+    elif k == 1 and cloud is not None:
         rb = _rips_betti(cloud, max_dim=2)
-        print(f"  rips-on-cloud beta (0,1) = {rb[:2]}")
+        rows.append(("rips-on-cloud (0,1)", _rich_ui.fmt_betti(list(rb[:2]))))
         assert (list(rb) + [0])[:2] == [1, n], f"rips beta {rb} != [1,{n}]"
-    print(f"  OK: bouquet topology verified")
+    else:
+        rows.append(("rips-on-cloud", "(not checked)"))
+    _rich_ui.result_table(f"Verify bouquet of {n} S^{k}", rows, c)
+    c.print(f"[bold green]OK:[/bold green] bouquet topology verified")
 
 
 def main() -> int:
@@ -85,24 +95,35 @@ def main() -> int:
     p.add_argument("--out", default=None, help="output CSV path (k=1 point cloud)")
     args = p.parse_args()
 
+    console = Console()
+    _rich_ui.params_table(p, args, console)
+
     if not (0.0 <= args.randomizer <= 1.0):
         raise SystemExit("--randomizer must be in [0, 1]")
+
+    expected = _expected_betti(args.n, args.k)
+    _rich_ui.result_table(f"Ground truth: bouquet of {args.n} S^{args.k}", [
+        ("summands", str(args.n)),
+        ("dimension", f"S^{args.k}"),
+        ("expected β", _rich_ui.fmt_betti(expected)),
+        ("output", args.out or "(none -- exact complex only)"),
+    ], console)
 
     if args.k != 1:
         if args.out:
             raise SystemExit("--out not available for k>=2 (no point cloud); omit --out")
-        verify(args.n, args.k, None)
+        verify(args.n, args.k, None, 0.0, console)
         return 0
 
     data = _apply_randomizer(build(args), args)
     if args.out:
         ps = PointSet(data, name="bouquet")
         ps.to_csv(args.out)
-        print(f"wrote {args.out}: n={ps.n} dim={ps.dim}")
+        console.print(f"[bold green]wrote[/bold green] {args.out}: n={ps.n} dim={ps.dim}")
     else:
-        print(f"bouquet cloud: n={data.shape[0]} dim={data.shape[1]} (use --out to write CSV)")
+        console.print(f"bouquet cloud: n={data.shape[0]} dim={data.shape[1]} (use --out to write CSV)")
     if args.verify:
-        verify(args.n, args.k, data, args.randomizer)
+        verify(args.n, args.k, data, args.randomizer, console)
     return 0
 
 

@@ -1,6 +1,6 @@
 # /// script
 # requires-python = ">=3.10"
-# dependencies = ["numpy>=1.26", "beartype>=0.18"]
+# dependencies = ["numpy>=1.26", "beartype>=0.18", "rich>=13"]
 # ///
 """Generate a ground-truth point cloud on the k-sphere S^k for TDA validation.
 
@@ -14,11 +14,16 @@ import sys
 from pathlib import Path
 
 ROOT = str(Path(__file__).resolve().parents[1])
-if ROOT not in sys.path:
-    sys.path.insert(0, ROOT)
+TOOLS = str(Path(__file__).resolve().parent)
+for _p in (ROOT, TOOLS):
+    if _p not in sys.path:
+        sys.path.insert(0, _p)
 
 import numpy as np
 
+from rich.console import Console
+
+import _rich_ui
 from vrtda import PointSet, generators as G
 from vrtda import pairwise_distances, build_rips, persistent_homology, betti_at
 from vrtda.complexes import make_simplicial_sphere
@@ -54,24 +59,27 @@ def _apply_randomizer(data: np.ndarray, args: argparse.Namespace) -> np.ndarray:
     return data + rng.normal(0.0, args.randomizer * args.radius, data.shape)
 
 
-def verify(k: int, cloud: np.ndarray, randomizer: float = 0.0) -> None:
+def verify(k: int, cloud: np.ndarray, randomizer: float = 0.0,
+           console: Console | None = None) -> None:
+    c = console or Console()
     expected = _expected_betti(k)
-    print(f"verify: S^{k} expected beta = {expected}")
-    C = make_simplicial_sphere(k)
-    exact = betti_at(C, float(C.values.max()))
-    print(f"  exact complex beta = {exact}")
-    assert exact == expected, f"exact complex beta {exact} != expected {expected}"
+    rows: list[tuple[str, str]] = [("expected", _rich_ui.fmt_betti(expected))]
+    with _rich_ui.timed(c, "Building exact simplicial sphere + homology"):
+        C = make_simplicial_sphere(k)
+        exact = betti_at(C, float(C.values.max()))
+    ok = exact == expected
+    rows.append(("exact complex", _rich_ui.fmt_betti(exact) + ("  [green]✓[/green]" if ok else "  [red]✗[/red]")))
+    assert ok, f"exact complex beta {exact} != expected {expected}"
     if randomizer > 0.0:
-        print("  (rips-on-cloud skipped: the cloud is jittered via --randomizer)")
-        print(f"  OK: S^{k} topology verified (exact complex)")
-        return
-    if k == 1:
+        rows.append(("rips-on-cloud", "(skipped: --randomizer jitter)"))
+    elif k == 1:
         rb = _rips_betti(cloud, max_dim=2)
-        print(f"  rips-on-cloud beta = {rb}")
+        rows.append(("rips-on-cloud", _rich_ui.fmt_betti(rb)))
         assert (list(rb) + [0])[:2] == [1, 1], f"rips beta {rb} != [1,1]"
     else:
-        print("  (rips-on-cloud not asserted: a uniform S^k cloud is scale-sensitive for k>=2)")
-    print(f"  OK: S^{k} topology verified")
+        rows.append(("rips-on-cloud", "(not checked: scale-sensitive for k>=2)"))
+    _rich_ui.result_table(f"Verify S^{k}", rows, c)
+    c.print(f"[bold green]OK:[/bold green] S^{k} topology verified")
 
 
 def main() -> int:
@@ -87,15 +95,26 @@ def main() -> int:
     p.add_argument("--out", required=True, help="output CSV path")
     args = p.parse_args()
 
+    console = Console()
+    _rich_ui.params_table(p, args, console)
+
     if not (0.0 <= args.randomizer <= 1.0):
         raise SystemExit("--randomizer must be in [0, 1]")
 
     data = _apply_randomizer(build(args), args)
     ps = PointSet(data, name="sphere")
     ps.to_csv(args.out)
-    print(f"wrote {args.out}: n={ps.n} dim={ps.dim}")
+
+    expected = _expected_betti(args.k)
+    _rich_ui.result_table(f"Ground truth: S^{args.k}", [
+        ("output", args.out),
+        ("points", str(ps.n)),
+        ("ambient dim", str(ps.dim)),
+        ("expected β", _rich_ui.fmt_betti(expected)),
+    ], console)
+
     if args.verify:
-        verify(args.k, data, args.randomizer)
+        verify(args.k, data, args.randomizer, console)
     return 0
 
 

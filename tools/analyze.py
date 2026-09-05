@@ -1,6 +1,6 @@
 # /// script
 # requires-python = ">=3.10"
-# dependencies = ["numpy>=1.26", "beartype>=0.18"]
+# dependencies = ["numpy>=1.26", "beartype>=0.18", "rich>=13"]
 # ///
 """One-command TDA analysis of a point-cloud CSV.
 
@@ -24,16 +24,20 @@ import sys
 from pathlib import Path
 
 ROOT = str(Path(__file__).resolve().parents[1])
-if ROOT not in sys.path:
-    sys.path.insert(0, ROOT)
+TOOLS = str(Path(__file__).resolve().parent)
+for _p in (ROOT, TOOLS):
+    if _p not in sys.path:
+        sys.path.insert(0, _p)
 
 import numpy as np
 
+from rich.console import Console
+
+import _rich_ui
 from vrtda import (
     PointSet,
     pairwise_distances,
     build_rips,
-    persistent_homology,
     attractors,
     reports,
 )
@@ -61,12 +65,16 @@ def main() -> int:
     p.add_argument("--plots", action="store_true", help="also save PNG plots (requires matplotlib)")
     args = p.parse_args()
 
+    console = Console()
+    _rich_ui.params_table(p, args, console)
+
     ps = PointSet.from_csv(args.points, value_cols=args.value_cols, index_cols=args.index_cols)
     D = pairwise_distances(ps.data, args.metric)
     nn = _nn(D)
     eps_max = args.frac * nn
-    C = build_rips(ps.data, D, eps_max, max_dim=args.max_dim)
-    bc = persistent_homology(C)
+    with _rich_ui.timed(console, f"Building Rips complex (max_dim={args.max_dim})"):
+        C = build_rips(ps.data, D, eps_max, max_dim=args.max_dim)
+    bc = _rich_ui.homology_progress(C, console)
     md = max(args.max_dim, bc.max_dim())
 
     out = Path(args.out_dir); out.mkdir(parents=True, exist_ok=True)

@@ -1,6 +1,6 @@
 # /// script
 # requires-python = ">=3.10"
-# dependencies = ["numpy>=1.26", "matplotlib>=3.7", "beartype>=0.18"]
+# dependencies = ["numpy>=1.26", "matplotlib>=3.7", "beartype>=0.18", "rich>=13"]
 # ///
 """Plot Betti function, persistence barcode, and 2D point cloud of a point-cloud CSV.
 
@@ -16,16 +16,20 @@ import sys
 from pathlib import Path
 
 ROOT = str(Path(__file__).resolve().parents[1])
-if ROOT not in sys.path:
-    sys.path.insert(0, ROOT)
+TOOLS = str(Path(__file__).resolve().parent)
+for _p in (ROOT, TOOLS):
+    if _p not in sys.path:
+        sys.path.insert(0, _p)
 
 import numpy as np
 
+from rich.console import Console
+
+import _rich_ui
 from vrtda import (
     PointSet,
     pairwise_distances,
     build_rips,
-    persistent_homology,
     plotting,
 )
 from vrtda.beartype_guard import beartype_module
