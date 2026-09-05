@@ -368,6 +368,48 @@ def make_sphere_complex(n_sub: int = 2, name: str = "sphere") -> FilteredComplex
         return _sort_and_build(ordered, "sphere", {"n_sub": n_sub, "name": name})
 
 
+def make_simplicial_sphere(k: int, name: str = "simplicial_sphere") -> FilteredComplex:
+    """The exact k-sphere S^k as the boundary of a (k+1)-simplex.
+
+    A (k+1)-simplex has k+2 vertices; its boundary (all proper faces, sizes 1..k+1) is a
+    genuine triangulated S^k with the correct Betti numbers beta = [1, 0, ..., 0, 1]
+    (the single 1 in H_k). Filtered by dimension, so it is a clean H_k reference for any
+    k -- unlike a truncated Rips complex, which exhibits spurious top-dimensional voids.
+    """
+    if k < 1:
+        raise FiltrationError("k must be >= 1")
+    verts = list(range(k + 2))
+    simp_set: set[tuple[int, ...]] = set()
+    for r in range(1, k + 2):
+        for face in combinations(verts, r):
+            simp_set.add(face)
+    ordered = [(float(len(s) - 1), len(s) - 1, s) for s in simp_set]
+    with debug.timing(f"make_simplicial_sphere k={k}"):
+        return _sort_and_build(ordered, "simplicial_sphere", {"k": k, "name": name})
+
+
+def make_bouquet_complex(n: int, k: int = 1, name: str = "bouquet") -> FilteredComplex:
+    """The exact wedge (bouquet) of n k-spheres, all sharing the single vertex 0.
+
+    Each summand is an S^k (the boundary of its own (k+1)-simplex) whose one vertex is
+    replaced by the shared vertex 0. The result has beta_0 = 1, a free H_k of rank n, and
+    no other homology: beta = [1, 0, ..., 0, n, 0, ...] with the n sitting in H_k.
+    """
+    if n < 1:
+        raise FiltrationError("n must be >= 1")
+    if k < 1:
+        raise FiltrationError("k must be >= 1")
+    simp_set: set[tuple[int, ...]] = set()
+    for i in range(n):
+        sphere_verts = (0,) + tuple(i * (k + 1) + 1 + a for a in range(k + 1))
+        for r in range(1, k + 2):
+            for face in combinations(sphere_verts, r):
+                simp_set.add(tuple(sorted(face)))
+    ordered = [(float(len(s) - 1), len(s) - 1, s) for s in simp_set]
+    with debug.timing(f"make_bouquet_complex n={n} k={k}"):
+        return _sort_and_build(ordered, "bouquet", {"n": n, "k": k, "name": name})
+
+
 from vrtda.beartype_guard import beartype_module as _beartype_module
 
 _beartype_module(__name__)

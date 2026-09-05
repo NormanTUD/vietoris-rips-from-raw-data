@@ -163,6 +163,27 @@ def torus3d_grid(nu: int, nv: int, nw: int, R: float = 1.0, r: float = 0.35) -> 
     return np.column_stack([x.ravel(), y.ravel(), z.ravel(), t.ravel()])
 
 
+def bouquet_circles(n: int, n_per: int = 16, radius: float = 1.0) -> np.ndarray:
+    """n circles wedged at a common point (the origin), each living in its own
+    coordinate plane of R^{2n}. The circles are disjoint away from the origin and all
+    pass through it, so a Vietoris-Rips complex at a suitable scale recovers the
+    figure-of-n: beta_0 = 1 and beta_1 = n. Use an even n_per so the shared origin
+    (the u = pi sample of each circle) lands exactly on the grid."""
+    if n < 1:
+        raise DataError("n must be >= 1")
+    if n_per < 2:
+        raise DataError("n_per must be >= 2")
+    u = np.linspace(0.0, 2.0 * np.pi, n_per, endpoint=False)
+    cx = radius * (1.0 + np.cos(u))
+    cy = radius * np.sin(u)
+    pts = np.zeros((n * n_per, 2 * n))
+    for i in range(n):
+        block = pts[i * n_per:(i + 1) * n_per]
+        block[:, 2 * i] = cx
+        block[:, 2 * i + 1] = cy
+    return pts
+
+
 from vrtda.beartype_guard import beartype_module as _beartype_module
 
 _beartype_module(__name__)
