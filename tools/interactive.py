@@ -175,28 +175,32 @@ _FEASIBLE_DEFAULT_BUDGET: int = 100_000
 _FEASIBLE_MAX_BUDGET: int = 160_000
 
 
-def _max_feasible_eps(X: np.ndarray, D: np.ndarray, start_eps: float,
-                      budget: int, max_mult: float = 8.0, steps: int = 8) -> float:
-    """SAFEGUARD (feasibility): the largest eps in [start_eps, start_eps*max_mult] at
-    which build_rips(max_dim=2) keeps <= budget simplices. Coarse geometric scan (no
-    homology) so it is cheap. Returns start_eps if even it exceeds the budget. This is
-    what caps the --points slider so pushing epsilon past the feasibility wall never
-    crashes -- it is capped and reported instead."""
-    best = start_eps
-    cur = start_eps
-    for _ in range(steps):
-        nxt = cur * 1.3
-        if nxt > start_eps * max_mult:
-            break
+def _max_feasible_eps(X: np.ndarray, D: np.ndarray, eps_hi: float,
+                      budget: int, lo: float = 0.0, iters: int = 11) -> float:
+    """SAFEGUARD (feasibility): the largest eps in [lo, eps_hi] at which build_rips
+    (max_dim=2) keeps <= budget simplices. The simplex count is monotone non-decreasing
+    in eps, so a binary search finds it cheaply. This lets the --points slider span the
+    FULL max-pairwise-distance (Dmax) when that is feasible, and caps at the largest
+    feasible epsilon when Dmax would blow the browser / pure-Python homology (reported,
+    never a crash)."""
+    lo = float(lo)
+    hi = float(eps_hi)
+    try:
+        if build_rips(X, D, hi, max_dim=2).n_simplices <= budget:
+            return hi  # the full range up to Dmax is feasible
+    except TooLargeError:
+        pass
+    for _ in range(iters):
+        mid = 0.5 * (lo + hi)
         try:
-            probe = build_rips(X, D, nxt, max_dim=2)
+            feasible = build_rips(X, D, mid, max_dim=2).n_simplices <= budget
         except TooLargeError:
-            break
-        if probe.n_simplices <= budget:
-            best, cur = float(nxt), float(nxt)
+            feasible = False
+        if feasible:
+            lo = mid
         else:
-            break
-    return best
+            hi = mid
+    return float(lo)
 
 
 def _pca3(X: np.ndarray) -> np.ndarray:
