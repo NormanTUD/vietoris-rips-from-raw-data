@@ -1427,11 +1427,18 @@ def _dim_interval_table(prom: dict[int, list[Interval]],
                         eps_max: float) -> dict[int, list[list[float | None]]]:
     """Serializable interval cards per dimension (for the systematic panel): birth,
     death (None when essential), length, share of the full range in %, essential flag.
-    'Alive at the current ε' is derived client-side from birth/death/essential."""
+    'Alive at the current ε' is derived client-side from birth/death/essential. The
+    recognition ROWS still count every prominent class -- this is only the DISPLAY
+    spine, so the top survivors per dim are capped (essential classes always first)."""
+    KEEP = 6
     tbl: dict[int, list[list[float | None]]] = {}
     for d, ivs in prom.items():
+        ess = [iv for iv in ivs if bool(iv.is_essential)]
+        fin = sorted((iv for iv in ivs if not iv.is_essential),
+                     key=lambda iv: float(iv.length), reverse=True)
+        pick = ess + fin[:max(0, KEEP - len(ess))]
         rows: list[list[float | None]] = []
-        for iv in ivs:
+        for iv in pick:
             death = None if not np.isfinite(float(iv.death)) else round(float(iv.death), 5)
             rows.append([round(float(iv.birth), 5), death,
                          round(float(iv.length), 5),
@@ -2153,39 +2160,98 @@ window.addEventListener("unhandledrejection", ev => {
 });
 let mismatchShown = false;
 
+function dimCardNote(ki, d){
+  const lines = (DATA.dim_summaries && DATA.dim_summaries[ki]) || [];
+  let t = lines[d] || "";
+  const ivs = (DATA.dim_intervals && DATA.dim_intervals[d]) || [];
+  if (ivs.length){
+    t += "\n\nprominente Intervalle (H" + d + "):";
+    for (const iv of ivs){
+      const birth = iv[0], death = iv[1], len = iv[2], pct = iv[3], ess = iv[4];
+      const alive = birth <= eps && (death === null || eps < death);
+      const end = death === null ? "\u221e" : death.toFixed(3);
+      t += "\n" + (alive ? "\u25cf" : "\u25cb") + "  [" + birth.toFixed(3) + "\u2192" + end +
+        "]  len " + len.toFixed(3) + " (" + pct + "% d. Bereichs)" + (ess ? " · ESSENTIAL" : "") +
+        (alive ? "  ← aktiv" : "");
+    }
+  }
+  return t;
+}
+
+function renderSyst(){
+  const s = document.getElementById("syst");
+  if (!s) return;
+  let html = "";
+  const put = (d, line) => html += `<div class="sl"><span class="htag" style="color:${DIM_COLOR[d] || "#ccc"}">${hsub(d)}</span><span>${line}</span></div>`;
+  if (MODE === "filtration"){
+    const ki = Math.max(0, Math.min((DATA.struct_rows || []).length - 1,
+                                    Math.round(eps / EMAX * ((DATA.struct_rows || []).length - 1))));
+    const lines = (DATA.dim_summaries && DATA.dim_summaries[ki]) || [];
+    for (let d = 0; d < lines.length; d++) if (dimsOn[d]) put(d, lines[d]);
+    if (html){
+      html += `<div class="sl" style="opacity:.5;margin-top:5px;font-size:10.5px">route: ${DATA.feat_route || ""}</div>`;
+    } else {
+      html = `<div class="sl" style="opacity:.45">alle Dimensionen ausgeblendet — Dimensionen unten wieder aktivieren</div>`;
+    }
+  } else {
+    const li = Math.max(0, Math.min(N_L - 1, Math.round(t)));
+    const L = DATA.layers[li];
+    const lines = (DATA.topo_dims && DATA.topo_dims[L]) || [];
+    if (lines.length){
+      for (let d = 0; d < lines.length; d++) if (dimsOn[d]) put(d, lines[d]);
+      if (!html) html = `<div class="sl" style="opacity:.45">alle Dimensionen ausgeblendet</div>`;
+    } else {
+      html = `<div class="sl" style="opacity:.45">keine per-Layer-Lesung an Tiefe ${L} (nur ${Object.keys(DATA.topo_dims || {}).length} gestridete Layer wurden analysiert)</div>`;
+    }
+  }
+  s.innerHTML = html;
+}
+
 function updateCards(){
   if (MODE === "filtration"){
+    const mask = activeMask();
     const b = bettiAt(eps);
+    const ki = Math.max(0, Math.min((DATA.struct_rows || []).length - 1,
+                                    Math.round(eps / EMAX * ((DATA.struct_rows || []).length - 1))));
     for (let d=0; d<=MD; d++){
       cardNums[d].textContent = b[d];
       cardNums[d].style.color = DIM_COLOR[d];
     }
     const badge = document.getElementById("badge");
     const dynBadge = document.getElementById("dynbadge");
-    const ki = Math.max(0, Math.min((DATA.struct_rows || []).length - 1,
-                                    Math.round(eps / EMAX * ((DATA.struct_rows || []).length - 1))));
     const firstClause = (s) => {
       if (!s) return "";
       const cut = Math.min(s.indexOf(":"), s.indexOf(";"), s.indexOf("("), s.length);
       const seg = cut > 0 ? s.slice(0, cut) : s;
       return seg.slice(0, 140);
     };
-    const featOK = DATA.target ? DATA.feat_row.slice(0, DATA.target.length)
+    const fullOK = DATA.target ? DATA.feat_row.slice(0, DATA.target.length)
           .every((v, i) => v === DATA.target[i]) : false;
-    const atEps = (DATA.topo_messages && DATA.topo_messages[ki]) || "";
-    badge.textContent = (featOK ? "✓ " : "") + firstClause(atEps);
-    badge.title = "Topology (persistent structure): " + DATA.topo_feature +
-                  "\nFeature β = [" + DATA.feat_row.join(", ") + "]";
+    const msg = maskedMsg(DATA.masked_messages && DATA.masked_messages[ki], mask);
+    const check = fullOK && mask === fullMask;
+    badge.textContent = (check ? "✓ " : "") +
+      (mask !== fullMask ? maskLabel(mask) + " " : "") + firstClause(msg);
+    badge.title = "Topology — aktive Dimensionen " + maskLabel(mask) +
+      "\n" + (msg || "(keine aktive Dimension)") +
+      "\n\nFeature (volle Struktur, " + (DATA.feat_route || "?") + "):\n" + DATA.topo_feature +
+      "\n\nFeature β = [" + DATA.feat_row.join(", ") + "]";
     dynBadge.textContent = firstClause(DATA.dyn_feature);
-    dynBadge.title = "Dynamics hypothesis: " + DATA.dyn_feature;
-    if (DATA.target){
-      const m = b.slice(0, DATA.target.length).every((v,i)=>v===DATA.target[i]);
-      for (let d=0; d<=MD; d++) document.querySelectorAll(".card")[d].classList.toggle("match", m);
+    dynBadge.title = "Dynamics-Hypothese (volle Struktur): " + DATA.dyn_feature;
+    const cards = document.querySelectorAll(".card");
+    const matchAll = DATA.target && mask === fullMask &&
+      b.slice(0, DATA.target.length).every((v,i)=>v===DATA.target[i]);
+    for (let d=0; d<=MD; d++){
+      const c = cards[d]; if (!c) continue;
+      c.style.display = dimsOn[d] ? "" : "none";
+      c.title = dimCardNote(ki, d);
+      c.classList.toggle("match", matchAll);
+    }
+    if (DATA.target && mask === fullMask){
       // Guardrail: at the top of the slider the computed Betti vector MUST equal the
       // declared target (e.g. a rebuilt exact T^2 must read [1,2,1]). A mismatch is a
       // loud error, never a silent wrong answer.
       if (eps === EMAX){
-        if (!m && !mismatchShown){
+        if (!matchAll && !mismatchShown){
           mismatchShown = true;
           showError("Topology mismatch at max ε",
             "Betti(" + EMAX + ") = [" + b.slice(0, DATA.target.length).join(", ") +
@@ -2200,26 +2266,34 @@ function updateCards(){
         hideError();
       }
     }
+    renderSyst();
   } else {
+    const mask = activeMask();
     const li = Math.max(0, Math.min(N_L-1, Math.round(t)));
     const ln = document.getElementById("layer-num"); if (ln) ln.textContent = DATA.layers[li] + "  /  " + DATA.layers[N_L-1];
     const tn = document.getElementById("tok-num"); if (tn) tn.textContent = N_TOK;
     const badge = document.getElementById("badge");
     const dynBadge = document.getElementById("dynbadge");
     const L = DATA.layers[li];
-    const tm = (DATA.topo_messages && DATA.topo_messages[L]) || "";
+    const mm = (DATA.topo_masked && DATA.topo_masked[L]) || null;
+    const tm = maskedMsg(mm, mask) || (DATA.topo_messages && DATA.topo_messages[L]) || "";
     const msg = (DATA.dyn_messages && DATA.dyn_messages[L]) || "";
     const tr = (DATA.dyn_transitions && DATA.dyn_transitions[L]) || "";
-    if (badge) badge.textContent = tm ? tm.split("(")[0].trim().slice(0, 130) : "";
-    if (badge) badge.title = "Topology at layer " + L + ":\n" + tm +
-      (DATA.topo_global ? "\n\nWhole-trajectory union guess:\n" + DATA.topo_global : "");
+    if (badge){
+      badge.textContent = (mask !== fullMask ? maskLabel(mask) + " " : "") +
+        (tm ? tm.split("(")[0].trim().slice(0, 130) : "");
+      badge.title = "Topology an Layer " + L + " — aktive Dimensionen " + maskLabel(mask) +
+        ":\n" + (tm || "(keine aktive Dimension)") +
+        (MODE === "trajectory" && DATA.topo_global ? "\n\nUnion-Hypothese (ganze Trajektorie):\n" + DATA.topo_global : "");
+    }
     if (dynBadge){
       dynBadge.textContent = (msg ? msg.split("(")[0].trim().slice(0, 70) : "") +
                              (tr ? " — ⇥ " + tr.slice(0, 60) : "");
-      dynBadge.title = "Dynamics at layer " + L + ":\n" + msg +
+      dynBadge.title = "Dynamics an Layer " + L + ":\n" + msg +
         (tr ? "\nBifurcation into this layer:\n" + tr : "") +
-        (DATA.dyn_global ? "\n\nWhole-trajectory attractor-set guess:\n" + DATA.dyn_global : "");
+        (DATA.dyn_global ? "\n\nAttraktor-Set der ganzen Trajektorie:\n" + DATA.dyn_global : "");
     }
+    renderSyst();
   }
 }
 
