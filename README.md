@@ -259,16 +259,31 @@ uv run tools/interactive.py --shape donut-rips --nper 8 --out donut-rips.html
 > grid's many short loops. There is no ε at which a dense Rips bagel reads β₁ = 2 — the
 > surface-completion ε is in the infeasible (>~300k simplex) range.
 >
-> **Mitigations (kept in sync across the codebase):**
-> 1. **To *see* a clean torus**, use `--shape donut` (exact T² cell complex) — instant, β = [1,2,1].
-> 2. **To watch Rips** on a bagel, use `--shape donut-rips` (capped at `nper ≤ 8`).
-> 3. **Loading your own CSV** (`--points`) that is a dense surface prints a yellow
->    *over-filling* NOTE (triangles/vertex ≫ 1.5) so the artifact Betti numbers aren't
->    mistaken for the true topology.
+> **Two distinct failure modes** of `--points <dense bagel>.csv` (both are Rips artifacts, not the true topology):
+> 1. **Wrong Betti numbers** — β₁ stuck at the grid's loop count, β₂ explodes (over-filling).
+> 2. **Incomplete 3D view** — the outer bulge is missing, because the outer surface's
+>    triangles form at a larger ε than the inner surface, and the slider is capped below that.
 >
-> Code guards: the `IMPORTANT` block at the top of `tools/interactive.py`,
-> `build_rips` in `vrtda/complexes.py`, `betti_function` in `vrtda/persistence.py`,
-> and the regression test `tests/test_interactive_display.py::test_donut_rips_full_range_overfills`.
+> **Mitigations / safeguards (kept in sync across the codebase):**
+> 1. **To *see* a clean, complete torus**, use `--shape donut` (exact T² cell complex) —
+>    instant, β = [1,2,1], slider runs to the full surface. *This is the reliable path.*
+> 2. **To watch Rips** on a bagel, use `--shape donut-rips` (capped at `nper ≤ 8`).
+> 3. **`--points` auto-raises the slider** past the connectivity ε up to the largest
+>    *feasible* ε (so the view is as complete as the browser/homology can handle) and prints
+>    a yellow **over-filling NOTE** (triangles/vertex ≫ 1.5).
+> 4. **`--eps-max <v>`** lets you push the slider higher toward the surface-completion scale;
+>    it is capped at the feasibility wall (reported, never a crash).
+>
+> ```bash
+> uv run tools/interactive.py --points bagel.csv --eps-max 0.28   # push toward the outer surface
+> ```
+>
+> Code guards: the `IMPORTANT` block at the top of `tools/interactive.py`, `build_rips` in
+> `vrtda/complexes.py`, `betti_function` in `vrtda/persistence.py`, the generation-time
+> warning in `make_torus.py`, and the regression tests in
+> `tests/test_interactive_display.py` (`test_donut_rips_full_range_overfills`,
+> `test_points_dense_bagel_detects_and_auto_raises`, `test_max_feasible_eps_caps_at_wall`,
+> `test_overfill_note_message`, `test_make_torus_dense_donut_warns`).
 
 ### `methods.py` — the selectable attractor-method suite  ⭐
 

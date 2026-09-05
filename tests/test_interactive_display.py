@@ -176,6 +176,70 @@ def test_donut_rips_full_range_overfills() -> None:
     assert b[1] != 2, "over-filled Rips bagel should not read a clean beta_1 = 2"
 
 
+# ---- dense-bagel over-filling: detection, auto-raise, feasibility cap, notes ---
+def test_is_overfilling_helper() -> None:
+    # A clean 2-manifold triangulation keeps ~1.5-2 triangles/vertex (NOT over-filling);
+    # dense Rips keeps tens (over-filling). Zero points is degenerate (False).
+    assert not interactive._is_overfilling(576, 1152)      # 2.0/vertex (exact torus scale)
+    assert not interactive._is_overfilling(500, 1000)      # 2.0/vertex
+    assert interactive._is_overfilling(1536, 33552)        # 21.8/vertex (the reported bug)
+    assert interactive._is_overfilling(100, 600)           # 6.0/vertex
+    assert not interactive._is_overfilling(0, 0)
+
+
+def test_points_dense_bagel_detects_and_auto_raises(tmp_path: Path) -> None:
+    # The "slider only goes to 0.188" fix: a dense bagel loaded as a point cloud must
+    # (a) be detected as over-filling, and (b) have its slider auto-raised ABOVE the
+    # connectivity epsilon up to the largest feasible epsilon (so more of the surface
+    # renders instead of stopping at connectivity).
+    X = G.donut_grid(20, 40)
+    csv = tmp_path / "bagel.csv"
+    PointSet(X).to_csv(str(csv))
+    eps_auto = interactive._eps_max(pairwise_distances(X), 1.6, 1.2)
+    C, *_ = interactive.build_source(_args("donut", points=str(csv)))
+    n_faces = sum(1 for s in C.simplexes if len(s) == 3)
+    assert interactive._is_overfilling(X.shape[0], n_faces), \
+        f"expected an over-filling dense bagel, got {n_faces}/{X.shape[0]} faces/vertex"
+    assert float(C.values.max()) > eps_auto, "dense bagel slider must be auto-raised above connectivity"
+
+
+def test_max_feasible_eps_caps_at_wall() -> None:
+    # --eps-max past the feasibility wall is capped (never a crash): the max feasible
+    # epsilon lies within [start, start*max_mult].
+    X = G.donut_grid(20, 40)
+    D = pairwise_distances(X)
+    eps_auto = interactive._eps_max(D, 1.6, 1.2)
+    cap = interactive._max_feasible_eps(X, D, eps_auto, budget=100_000)
+    assert eps_auto <= cap <= eps_auto * 8.0 + 1e-9
+
+
+def test_overfill_note_message() -> None:
+    import io
+    from rich.console import Console
+    import _rich_ui
+    buf = io.StringIO()
+    _rich_ui.overfill_note(Console(file=buf), 1536, 33552)
+    text = buf.getvalue()
+    assert "over-filling" in text
+    assert "--shape donut" in text
+
+
+def test_make_torus_dense_donut_warns() -> None:
+    import io
+    import importlib.util
+    from rich.console import Console
+    spec = importlib.util.spec_from_file_location("vrtda_make_torus_x", ROOT / "tools" / "make_torus.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    args = argparse.Namespace(kind="donut", grid=True, nper=48, out="/tmp/bagel.csv")
+    buf = io.StringIO()
+    mod._warn_dense_donut(args, 24 * 48, Console(file=buf))     # dense -> warns
+    assert "--shape donut" in buf.getvalue()
+    buf2 = io.StringIO()
+    mod._warn_dense_donut(args, 64, Console(file=buf2))         # sparse -> silent
+    assert buf2.getvalue() == ""
+
+
 def test_connectivity_threshold_matches_components() -> None:
     from collections import deque
     X = G.donut_grid(12, 16)
