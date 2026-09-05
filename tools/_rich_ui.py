@@ -114,6 +114,32 @@ class progress:
             self._prog.stop()
 
 
+# ---------------------------------------------------------------------------
+# IMPORTANT (DO NOT REMOVE) — the dense-bagel Rips over-filling guard.
+# See the full write-up at the top of tools/interactive.py. This NOTE (not an
+# error) tells the user that a dense point cloud makes Rips over-fill the
+# higher dimensions, so the Betti numbers are a sampling artifact, not the
+# true topology.
+# ---------------------------------------------------------------------------
+def overfill_note(console: Console, n_points: int, n_faces: int) -> None:
+    """NOTE (not an error): a dense point cloud makes Vietoris-Rips over-fill the
+    higher dimensions, so the Betti numbers it shows are a sampling artifact.
+
+    A clean 2-manifold triangulation has ~1.5 triangles per vertex. Rips on a
+    dense bagel keeps dozens, so its 2-skeleton triangulates the holes away:
+    beta_2 explodes and beta_1 shreds into many short loops.
+    """
+    per = n_faces / max(1, n_points)
+    console.print(
+        "[yellow][bold]NOTE — dense point cloud, Rips over-filling:[/bold] "
+        f"{n_faces:,} triangles over {n_points:,} points ({per:.1f} per vertex; a clean "
+        "triangulation has ~1.5). The Betti numbers below (huge β₂, β₁ stuck at the grid's "
+        "loop count) are a Rips sampling artifact, NOT the true topology. To see a clean "
+        "low-dim torus use [bold]--shape donut[/bold] (exact T² cell complex); or re-sample "
+        "sparser.[/yellow]"
+    )
+
+
 from vrtda.beartype_guard import beartype_module as _beartype_module
 
 _beartype_module(__name__)
