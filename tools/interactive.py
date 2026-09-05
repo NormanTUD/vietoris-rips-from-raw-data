@@ -43,6 +43,7 @@ import argparse
 import json
 import sys
 import time
+import traceback
 from pathlib import Path
 
 ROOT = str(Path(__file__).resolve().parents[1])
@@ -866,6 +867,12 @@ TEMPLATE = r"""<!DOCTYPE html>
   #badge { font-size: 12px; color:#2ea043; font-weight:650; }
   #legend { display:flex; flex-wrap:wrap; gap:6px 12px; font-size:11.5px; color:var(--mut); }
   #legend .dot { width:10px; height:10px; }
+  #errbox { display:none; position:fixed; left:16px; right:16px; bottom:14px; z-index:1000;
+            background:#3d1115; border:1px solid #f85149; border-left:6px solid #f85149;
+            border-radius:10px; padding:12px 16px; box-shadow:0 8px 28px rgba(0,0,0,.55); }
+  #errbox h4 { margin:0 0 6px; font-size:14px; color:#ffa28b; }
+  #errbox pre { margin:0; font-size:11.5px; line-height:1.45; color:#ffd7d0; max-height:38vh;
+                overflow:auto; white-space:pre-wrap; word-break:break-word; }
 </style>
 </head>
 <body>
@@ -910,6 +917,10 @@ TEMPLATE = r"""<!DOCTYPE html>
     <button id="resetview">Reset view</button>
     <input type="range" id="slider" min="0" max="1000" value="0">
     <div id="eps-readout"></div>
+  </div>
+  <div id="errbox">
+    <h4 id="err-title"></h4>
+    <pre id="err-body"></pre>
   </div>
 
 <script>
@@ -1277,6 +1288,39 @@ function bettiAt(e){
   idx = Math.max(0, Math.min(GRID.length-1, idx));
   return TABLE[idx];
 }
+
+// ---- guardrails ----------------------------------------------------------
+// Any calculation misstep must surface LOUDLY in the browser: a sticky red error box
+// with the failing state (ε, target, …), plus full detail on the JS console.
+let errSource = null;
+function showError(title, body, source){
+  errSource = source || "misc";
+  const box = document.getElementById("errbox");
+  const t = document.getElementById("err-title");
+  const b = document.getElementById("err-body");
+  t.textContent = title;
+  b.textContent = body + "\n\nstate: eps=" + eps + "/" + EMAX +
+    " · sliderMax=" + (DATA.eps_max ?? "?") +
+    (DATA.target ? " · target=[" + DATA.target.join(",") + "]" + " · got=[" + bettiAt(eps).slice(0, DATA.target.length).join(",") + "]" : "");
+  box.style.display = "block";
+  console.error(title + "\n" + body);
+}
+function hideError(){
+  if (errSource === "runtime") return;   // runtime errors stay visible until reload
+  document.getElementById("errbox").style.display = "none";
+}
+window.addEventListener("error", ev => {
+  showError("JS runtime error",
+    (ev && ev.message || "unknown error") +
+    "\n\nstack:\n" + (ev && ev.error && ev.error.stack || "(none)"), "runtime");
+});
+window.addEventListener("unhandledrejection", ev => {
+  showError("Unhandled promise rejection",
+    (ev && ev.reason && (ev.reason.stack || ev.reason.message || String(ev.reason)) || "unknown"),
+    "runtime");
+});
+let mismatchShown = false;
+
 function updateCards(){
   if (MODE === "filtration"){
     const b = bettiAt(eps);
@@ -1289,6 +1333,24 @@ function updateCards(){
       const m = b.slice(0, DATA.target.length).every((v,i)=>v===DATA.target[i]);
       badge.textContent = m ? "✓ matches expected topology" : "";
       for (let d=0; d<=MD; d++) document.querySelectorAll(".card")[d].classList.toggle("match", m);
+      // Guardrail: at the top of the slider the computed Betti vector MUST equal the
+      // declared target (e.g. a rebuilt exact T^2 must read [1,2,1]). A mismatch is a
+      // loud error, never a silent wrong answer.
+      if (eps === EMAX){
+        if (!m && !mismatchShown){
+          mismatchShown = true;
+          showError("Topology mismatch at max ε",
+            "Betti(" + EMAX + ") = [" + b.slice(0, DATA.target.length).join(", ") +
+            "] but DATA.target = [" + DATA.target.join(", ") +
+            "].\n\nThe slider is at its maximum, so every simplex in the dataset must be " +
+            "present — this build should yield exactly the declared target topology. The " +
+            "data or the build path is inconsistent (look at the Python-side traceback).",
+            "target");
+        }
+      } else {
+        mismatchShown = false;
+        hideError();
+      }
     } else badge.textContent = "";
   } else {
     const li = Math.max(0, Math.min(N_L-1, Math.round(t)));
@@ -1422,10 +1484,30 @@ def main() -> int:
     _rich_ui.params_table(p, args, console)
 
     t0 = time.time()
-    if args.layers is not None:
-        data = build_layer_trajectory(args)
-    else:
-        data = build_payload(args)
+    try:
+        if args.layers is not None:
+            data = build_layer_trajectory(args)
+        else:
+            data = build_payload(args)
+    except VrtdaError as e:
+        # Loud, state-bearing failure: no silent wrong output. Dump the reason + state
+        # (a VrtdaError from the torus path already carries why/which step), then the
+        # full traceback so the whole calculation is reconstructable.
+        console.print("\n[bold red]calculation failed (VrtdaError)[/bold red]")
+        console.print(str(e))
+        console.print("[dim]full traceback:[/dim]")
+        traceback.print_exc()
+        return 2
+    except TooLargeError as e:
+        console.print("\n[bold red]too large to compute[/bold red]")
+        console.print(f"[red]{e}[/red]")
+        traceback.print_exc()
+        return 2
+    except Exception as e:  # any misstep must fail loudly, never silently
+        console.print(f"\n[bold red]unexpected error: {type(e).__name__}[/bold red]")
+        console.print(f"[red]{e}[/red]")
+        traceback.print_exc()
+        return 3
     html = render_html(data).replace("__TITLE__", data["title"])
     out = Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)

@@ -307,6 +307,112 @@ def test_points_no_exact_torus_forces_rips(tmp_path: Path) -> None:
     assert interactive._is_overfilling(X.shape[0], n_faces)
 
 
+# ---- fitted T^2 on IRREGULAR torus clouds (the user's fat/noisy bagel fix) ---
+def test_torus_fit_accepts_irregular_tori() -> None:
+    # A NON-grid torus sampling (random donut / noisy donut) is still detected and gets
+    # a valid 2-factor grid (nu*nv == n), so a closed T^2 can be rebuilt on the points.
+    for maker in (G.donut(1536, seed=2), G.donut(400, seed=0),
+                  G.donut(1536, seed=1, noise=0.05)):
+        fit = interactive._torus_fit(maker)
+        assert fit is not None, f"_torus_fit rejected a real torus cloud ({maker.shape})"
+        nu, nv, R, r = fit
+        assert nu >= 2 and nv >= 2 and nu * nv == maker.shape[0]
+        assert 0 < r < R
+        assert r / R < 0.70, f"fatness {r/R:.3f} too high for a torus surface"
+
+
+def test_torus_fit_recovers_clean_grid_counts() -> None:
+    nu, nv, R, r = interactive._torus_fit(G.donut_grid(24, 64))
+    assert (nu, nv) == (24, 64)
+    assert abs(R - 1.0) < 1e-9 and abs(r - 0.35) < 1e-9
+
+
+def test_torus_fit_rejects_non_tori() -> None:
+    # A sphere and a multi-cluster blob are NOT tori: their "tube" wraps through the
+    # middle (r/R ~ 0.9-1.0), so the r/R < 0.70 guard rejects them. A circle has no
+    # 3D tube at all. A torus drowned in heavy noise (noise=0.25) is no longer a
+    # thin torus surface and must also be rejected.
+    assert interactive._torus_fit(G.sphere(600, 3)) is None
+    assert interactive._torus_fit(G.gmm(3, 90, 3)) is None
+    assert interactive._torus_fit(G.circle_grid(48, radius=1.0)) is None
+    assert interactive._torus_fit(G.donut(400, seed=0, noise=0.25)) is None
+
+
+def test_torus_fit_needs_factorable_count() -> None:
+    # 37 is prime -> no (nu, nv) grid can be rebuilt -> falls through (None), so the
+    # caller (build_source) uses honest Rips instead of inventing a fake grid.
+    assert interactive._torus_fit(G.donut(37, seed=0)) is None
+
+
+def test_assign_torus_grid_is_bijection() -> None:
+    X = G.donut(1536, seed=2)
+    nu, nv, R, r = interactive._torus_fit(X)
+    assign = interactive._assign_torus_grid(X, nu, nv, R, r)
+    assert assign.shape == (1536,)
+    assert sorted(int(x) for x in assign) == list(range(1536))
+    assert len(set(int(x) for x in assign)) == 1536
+
+
+def test_assign_torus_grid_rejects_mismatched_grid() -> None:
+    X = G.donut_grid(24, 64)
+    with pytest.raises(interactive.VrtdaError):
+        interactive._assign_torus_grid(X, 24, 63, 1.0, 0.35)
+    with pytest.raises(interactive.VrtdaError):
+        interactive._assign_torus_grid(X, 7, 64, 1.0, 0.35)  # 7 does not divide 1536
+
+
+def test_points_irregular_torus_closes_up_to_t2(tmp_path: Path) -> None:
+    # THE headline for the user's real file: an IRREGULAR fat torus cloud (like
+    # torus2.csv) loaded via --points is rebuilt as the exact T^2 cell complex on the
+    # actual points. At the top of the slider every edge + face is present -> a closed
+    # torus, exactly [1, 2, 1], with corners on the user's own points (a real bagel).
+    X = G.donut(1536, seed=2)
+    csv = tmp_path / "irregular_bagel.csv"
+    PointSet(X).to_csv(str(csv))
+    C, pts, proj, target, _rd = interactive.build_source(_args("donut", points=str(csv)))
+    assert target == [1, 2, 1]
+    assert betti_at(C, float(C.values.max()))[:3] == [1, 2, 1]
+    assert "exact" in proj
+    assert is_bagel(pts), "fitted T^2 corners must sit on a real bagel surface"
+    n_faces = sum(1 for s in C.simplexes if len(s) == 3)
+    nu, nv = 32, 48  # the best-fit factorization for donut(1536)
+    assert n_faces == 2 * nu * nv
+
+
+def test_fitted_t2_guardrail_value_monotonicity() -> None:
+    # Every face of the fitted T^2 must be born exactly at (never before) its edges.
+    X = G.donut(1536, seed=2)
+    nu, nv, R, r = interactive._torus_fit(X)
+    assign = interactive._assign_torus_grid(X, nu, nv, R, r)
+    pts = X[assign]
+    assert pts.shape == (1536, 3)
+    # Spot-check: grid-neighbour edges must be near-nearest (short), else the fit
+    # strung unrelated points together.
+    for k in (0, 7, 100, 999, 1535):
+        i, j = k % nu, k // nu
+        nb = [((i + 1) % nu) + j * nu, i + ((j + 1) % nv) * nu]
+        for m in nb:
+            d = float(np.linalg.norm(pts[k] - pts[m]))
+            assert d < 0.5, f"grid neighbour {k}->{m} too far ({d:.3f})"
+
+
+def test_render_html_has_js_guardrails() -> None:
+    # The generated HTML must carry the browser-side guardrails: a visible error box,
+    # global error handlers, and a top-of-slider beta-vs-target check that goes LOUd
+    # on mismatch instead of silently showing the wrong topology.
+    data: dict[str, object] = {
+        "title": "t", "mode": "filtration", "maxdim": 2, "eps_max": 1.0,
+        "target": [1, 2, 1], "points": [], "edges": [], "faces": [],
+        "intervals": [], "betti": {"grid": [0.0, 0.5, 1.0], "table": [[1, 0, 0], [1, 1, 0], [1, 2, 1]]},
+    }
+    html = interactive.render_html(data).replace("__TITLE__", "t")
+    assert 'id="errbox"' in html and 'id="err-title"' in html and 'id="err-body"' in html
+    assert "function showError" in html
+    assert 'window.addEventListener("error"' in html
+    assert 'window.addEventListener("unhandledrejection"' in html
+    assert "Topology mismatch at max" in html
+
+
 def test_connectivity_threshold_matches_components() -> None:
     from collections import deque
     X = G.donut_grid(12, 16)
