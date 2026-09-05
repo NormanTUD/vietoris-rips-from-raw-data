@@ -19,7 +19,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from vrtda import pairwise_distances, build_rips, persistent_homology, betti_at
+from vrtda import PointSet, pairwise_distances, build_rips, persistent_homology, betti_at
 from vrtda import generators as G
 from vrtda.complexes import make_torus_grid_complex
 from vrtda.beartype_guard import beartype_module
