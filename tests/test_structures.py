@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import argparse
 import importlib.util
+import sys
 import types
 from math import comb
 from pathlib import Path
@@ -54,6 +55,7 @@ def _load_tool(name: str) -> types.ModuleType:
     spec = importlib.util.spec_from_file_location(name, path)
     assert spec is not None and spec.loader is not None
     mod = importlib.util.module_from_spec(spec)
+    sys.modules[name] = mod  # so the tool's beartype_module(__name__) can resolve it
     spec.loader.exec_module(mod)
     return mod
 
@@ -136,8 +138,9 @@ def test_bouquet_circles_shape_and_wedge_point() -> None:
     for n in (1, 2, 4):
         X = G.bouquet_circles(n, n_per=16)
         assert X.shape == (n * 16, 2 * n)
-        # every circle passes through the origin: exactly n coincident all-zero rows
-        origin_rows = int((X == 0).all(axis=1).sum())
+        # every circle passes through the origin: exactly n near-origin rows (tolerance
+        # for float: sin(pi) is ~1e-16, not exactly 0)
+        origin_rows = int((np.abs(X) < 1e-9).all(axis=1).sum())
         assert origin_rows == n
 
 
