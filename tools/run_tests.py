@@ -1,6 +1,6 @@
 # /// script
 # requires-python = ">=3.10"
-# dependencies = ["numpy>=1.26", "pytest>=8", "beartype>=0.18"]
+# dependencies = ["numpy>=1.26", "pytest>=8", "beartype>=0.18", "rich>=13"]
 # ///
 import sys
 from pathlib import Path
