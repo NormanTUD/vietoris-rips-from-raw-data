@@ -298,31 +298,25 @@ def build_source(args: argparse.Namespace) -> tuple[FilteredComplex, np.ndarray,
         X = PointSet.from_csv(args.points, value_cols=args.value_cols, index_cols=args.index_cols).data
         D = pairwise_distances(X, args.metric)
         console = Console()
-        eps_auto = _eps_max(D, args.frac, getattr(args, "connect_margin", 1.2))
         max_dim = max(3, args.max_dim)
-        # Build once at the fast, connected baseline and check for over-filling.
-        C = _build_rips_safe(X, D, eps_auto, max_dim)
+        # The slider spans the FULL Vietoris-Rips range: eps 0 -> max pairwise distance
+        # (Dmax), or 0 -> --eps-max if the user gives an explicit (smaller) ceiling.
+        Dmax = float(D.max())
+        eps_hi = Dmax if args.eps_max is None else min(float(args.eps_max), Dmax)
+        # A DENSE cloud's Dmax is infeasible (the Rips complex would have millions of
+        # simplices -> the browser and the pure-Python homology both choke). We cap at
+        # the largest FEASIBLE epsilon and say so. This is not ignoring --eps-max: it is
+        # the largest value that can actually be built. Sparse clouds reach Dmax in full.
+        eps_max = _max_feasible_eps(X, D, eps_hi, budget=_FEASIBLE_MAX_BUDGET)
+        if eps_max < eps_hi - 1e-9:
+            console.print(f"[yellow]NOTE: max distance {eps_hi:.3f} is infeasible for this "
+                          f"{X.shape[0]}-pt cloud (the Rips complex would have millions of "
+                          f"simplices); capping the slider at the largest feasible "
+                          f"{eps_max:.3f}. For a full-range Rips torus use a SPARSE bagel "
+                          f"(`--shape donut-rips`); for a clean torus use `--shape donut`.[/yellow]")
+        C = _build_rips_safe(X, D, eps_max, max_dim)
         n_faces = sum(1 for s in C.simplexes if len(s) == 3)
         overfill = _is_overfilling(X.shape[0], n_faces)
-
-        # Decide the slider's upper bound (the "only goes to 0.188" fix):
-        #  - --eps-max N  : honour the user's request, capped at the feasibility wall.
-        #  - dense surface (over-fill) : auto-raise past connectivity to the largest
-        #    default-budget feasible eps so the view renders as completely as it can.
-        #  - otherwise      : the fast, connected baseline.
-        if args.eps_max is not None:
-            eps_max = min(float(args.eps_max), _max_feasible_eps(X, D, eps_auto, budget=_FEASIBLE_MAX_BUDGET))
-            if eps_max < float(args.eps_max) - 1e-9:
-                console.print(f"[yellow]NOTE: --eps-max {float(args.eps_max):.3f} exceeds the feasible "
-                              f"limit for this cloud; capping the slider at {eps_max:.3f}.[/yellow]")
-        elif overfill:
-            eps_max = _max_feasible_eps(X, D, eps_auto, budget=_FEASIBLE_DEFAULT_BUDGET)
-            if eps_max > eps_auto + 1e-9:
-                C = _build_rips_safe(X, D, eps_max, max_dim)
-                n_faces = sum(1 for s in C.simplexes if len(s) == 3)
-        else:
-            eps_max = eps_auto
-
         if overfill:
             _rich_ui.overfill_note(console, X.shape[0], n_faces)
         pts, proj = _to3d(X, "rips")
