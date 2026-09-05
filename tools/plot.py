@@ -55,12 +55,16 @@ def main() -> int:
     p.add_argument("--out-dir", required=True, help="directory for the PNGs")
     args = p.parse_args()
 
+    console = Console()
+    _rich_ui.params_table(p, args, console)
+
     ps = PointSet.from_csv(args.points, value_cols=args.value_cols, index_cols=args.index_cols)
     D = pairwise_distances(ps.data, args.metric)
     nn = _nn(D)
     eps_max = args.frac * nn
-    C = build_rips(ps.data, D, eps_max, max_dim=args.max_dim)
-    bc = persistent_homology(C)
+    with _rich_ui.timed(console, f"Building Rips complex (max_dim={args.max_dim})"):
+        C = build_rips(ps.data, D, eps_max, max_dim=args.max_dim)
+    bc = _rich_ui.homology_progress(C, console)
 
     out = Path(args.out_dir)
     out.mkdir(parents=True, exist_ok=True)

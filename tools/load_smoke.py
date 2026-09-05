@@ -1,19 +1,26 @@
 # /// script
 # requires-python = ">=3.10"
-# dependencies = ["numpy>=1.26", "beartype>=0.18"]
+# dependencies = ["numpy>=1.26", "beartype>=0.18", "rich>=13"]
 # ///
 """Phase-2 smoke: load the real transformer data and run a small Rips + betti sweep."""
 import sys
 from pathlib import Path
 
 ROOT = str(Path(__file__).resolve().parents[1])
-if ROOT not in sys.path:
-    sys.path.insert(0, ROOT)
+TOOLS = str(Path(__file__).resolve().parent)
+for _p in (ROOT, TOOLS):
+    if _p not in sys.path:
+        sys.path.insert(0, _p)
 
 import numpy as np
 
+from rich.console import Console
+
+import _rich_ui
 import vrtda as V
 from vrtda.beartype_guard import beartype_module
+
+_console = Console()
 
 
 def nn(D: np.ndarray) -> float:
@@ -26,7 +33,7 @@ def betti_line(ps: "V.PointSet", metric: str, max_dim: int, lo: float, hi: float
     nnn = nn(D)
     eps_max = hi * nnn
     C = V.build_rips(ps.data, D, eps_max, max_dim=max_dim)
-    bc = V.persistent_homology(C)
+    bc = _rich_ui.homology_progress(C, _console)
     eps = np.linspace(lo * nnn, hi * nnn, n)
     md = max(max_dim, bc.max_dim())
     line: list[tuple[int, ...]] = []
@@ -38,7 +45,8 @@ def betti_line(ps: "V.PointSet", metric: str, max_dim: int, lo: float, hi: float
 
 
 def show(title: str, ps: "V.PointSet", metric: str, max_dim: int, lo: float = 0.9, hi: float = 2.0) -> None:
-    nnn, nsimp, line = betti_line(ps, metric, max_dim, lo, hi)
+    with _rich_ui.timed(_console, f"Rips + homology: {title}"):
+        nnn, nsimp, line = betti_line(ps, metric, max_dim, lo, hi)
     print(f"\n== {title} == n={ps.n} dim={ps.dim} nn={nnn:.4g} nsimp={nsimp}")
     print("   eps-frac : " + "  ".join(f"{v:>6}" for v in np.linspace(lo, hi, 12).round(2)))
     for i, b in enumerate(line):
