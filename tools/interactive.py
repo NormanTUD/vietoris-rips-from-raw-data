@@ -159,6 +159,35 @@ def _torus_betti(k: int) -> list[int]:
     return [int(comb(k, d)) for d in range(k + 1)]
 
 
+def _exact_torus2(nu: int, kind: str, label: str) -> tuple[FilteredComplex, np.ndarray, str, list[int], int]:
+    """The exact T^2 cell complex with a positional filtration (vertices, then edges,
+    then faces), displayed as a bagel surface. Clean beta = [1, 2, 1] and instant --
+    unlike a Rips bagel, which over-fills and never reads a clean beta_1 = 2."""
+    C0 = make_torus_grid_complex(2, (nu, nu))
+    simps = list(C0.simplexes)
+
+    def i_of(j: int) -> int:
+        return j % nu
+
+    vals: list[float] = []
+    for s in simps:
+        d = len(s) - 1
+        if d == 0:
+            vals.append(0.0)
+        elif d == 1:
+            ph = (i_of(s[0]) + i_of(s[1])) / 2.0 / nu
+            vals.append(1.0 + 0.8 * ph)
+        else:
+            ph = (i_of(s[0]) + i_of(s[1]) + i_of(s[2])) / 3.0 / nu
+            vals.append(2.0 + 0.8 * ph)
+    C = FilteredComplex(
+        simps, np.array(vals, dtype=np.float64),
+        np.array([len(s) - 1 for s in simps], dtype=np.int64), kind, {"nu": nu, "nv": nu},
+    )
+    pts = _torus_surface(nu, nu)
+    return C, pts, label, [1, 2, 1], int(C.max_dim())
+
+
 def build_source(args: argparse.Namespace) -> tuple[FilteredComplex, np.ndarray, str, list[int] | None, int]:
     """Return (complex, display_points_3d, projection_label, target_betti_or_None, report_dim).
 
