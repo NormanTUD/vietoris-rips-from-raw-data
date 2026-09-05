@@ -212,11 +212,11 @@ def build_source(args: argparse.Namespace) -> tuple[FilteredComplex, np.ndarray,
         # Real Vietoris-Rips on a bagel, with the slider spanning the FULL range
         # eps 0 -> max pairwise distance. Building the whole 2-skeleton is fine, but
         # its persistent homology is pure-Python and slow, so cap the grid at a size
-        # whose full-range build is feasible (10x10 ~ a few tens of seconds; 16x16 is
-        # minutes). At max distance the bagel over-fills (the holes get triangulated
-        # away -> beta_1 drops, beta_2 blows up); the clean torus (beta_1 = 2) shows
-        # at an intermediate epsilon on the way up.
-        nper = min(args.nper, 10)
+        # whose full-range build is snappy (~8x8 ~ a few seconds; 10x10 ~ a minute;
+        # 16x16 is many minutes). At max distance the bagel over-fills (the holes get
+        # triangulated away -> beta_1 drops, beta_2 blows up); the clean torus
+        # (beta_1 = 2) shows at an intermediate epsilon on the way up.
+        nper = min(args.nper, 8)
         if nper != args.nper:
             print(f"[donut] full-range Rips homology is slow; capping grid "
                   f"{args.nper}x{args.nper} -> {nper}x{nper}", file=sys.stderr)

@@ -53,13 +53,17 @@ class Barcode:
         return out
 
     def betti_function(self, epsilons: Sequence[float] | np.ndarray) -> np.ndarray:
-        epsilons = list(epsilons)
+        eps = np.asarray(epsilons, dtype=np.float64)
         md = self.max_dim()
-        arr = np.zeros((len(epsilons), md + 1), dtype=np.int64)
-        for col, d in enumerate(range(md + 1)):
+        arr = np.zeros((len(eps), md + 1), dtype=np.int64)
+        for d in range(md + 1):
             ivs = self.of_dim(d)
-            for r, e in enumerate(epsilons):
-                arr[r, col] = sum(1 for iv in ivs if iv.alive_at(e))
+            if not ivs:
+                continue
+            births = np.fromiter((iv.birth for iv in ivs), dtype=np.float64, count=len(ivs))
+            deaths = np.fromiter((iv.death for iv in ivs), dtype=np.float64, count=len(ivs))
+            alive = (births[None, :] <= eps[:, None]) & (eps[:, None] < deaths[None, :])
+            arr[:, d] = alive.sum(axis=1)
         return arr
 
     def summary(self) -> dict:
