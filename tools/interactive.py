@@ -272,19 +272,32 @@ def _components_curve(D: np.ndarray, eps_grid: np.ndarray) -> list[int]:
     return out
 
 
-def _beyond_cap(c: int, maxdim: int, cap: float) -> tuple[list[int], str, list[str], dict[int, str], str]:
+def _beyond_cap(c: int, maxdim: int, cap: float,
+                dmax: float | None = None, why: str = "") -> tuple[list[int], str, list[str], dict[int, str], str]:
     """Recognition rows for ε ABOVE the feasible 2-complex cap: β₀ is exact (1-skeleton),
     H₁..H_top are UNKNOWN (honestly -- the complex that would measure them is infeasible,
     so a number would be a lie). Returns (struct_row, topo_message, dim_summaries,
-    masked_messages, dyn_message)."""
+    masked_messages, dyn_message). `dmax` is the max pairwise distance (where the complex
+    is guaranteed to be the full simplex, β=[1,0,..]); `why` is the concrete infeasibility
+    reason (e.g. core/Komplex-Größe)."""
     row = [int(c)] + [0] * int(maxdim)
-    msg = (f"β₀ = {c} Komponente(n) — exakt aus dem 1-Skelett; H₁…H_{maxdim} sind "
-           f"jenseits ε={cap:.3f} NICHT bestimmbar (der 2-Komplex ist dort infeasibel)")
+    head = (f"β₀ = {c} Komponente(n) — exakt aus dem 1-Skelett"
+            if c != 1 else "β₀ = 1 Komponente — die Wolke ist zusammenhängend (1-Skelett)")
+    if why:
+        infeas = f"H₁…H_{maxdim} sind jenseits ε={cap:.3f} nicht exakt bestimmbar ({why})"
+    else:
+        infeas = (f"H₁…H_{maxdim} sind jenseits ε={cap:.3f} nicht exakt bestimmbar "
+                  f"(der 2-Komplex ist dort infeasibel)")
+    msg = f"{head}; {infeas}"
+    if dmax is not None:
+        msg += (f" Garantiert: bei ε={dmax:.2f} (max Abstand) ist der Komplex der volle "
+                f"Simplex → β=[1,{ ', '.join(['0'] * maxdim)}].")
     if maxdim >= 1:
         dims = ([f"{c} Komponente(n) — 1-Skelett, exakt (jenseits der 2-Komplex-Grenze "
-                 f"ε={cap:.3f})" if c != 1 else f"1 Komponente — die Wolke ist "
-                 f"zusammenhängend (1-Skelett, jenseits der 2-Komplex-Grenze ε={cap:.3f})"]
-                + [f"H_{d}: NICHT bestimmbar — 2-Komplex infeasibel jenseits ε={cap:.3f}"
+                 f"ε={cap:.3f})" if c != 1 else f"1 Komponente — zusammenhängend "
+                 f"(1-Skelett, jenseits der 2-Komplex-Grenze ε={cap:.3f})"]
+                + [f"H_{d}: nicht exakt bestimmbar jenseits ε={cap:.3f}" +
+                   (f" (der 2-Komplex wäre dort zu groß)" if not why else f" ({why})")
                    for d in range(1, maxdim + 1)])
     else:
         dims = [f"{c} Komponente(n) — 1-Skelett, exakt"]
@@ -296,8 +309,128 @@ def _beyond_cap(c: int, maxdim: int, cap: float) -> tuple[list[int], str, list[s
                          if c != 1 else "only H₀: 1 Komponente — zusammenhängend")
         else:
             masked[m] = msg
-    dyn_msg = "keine Dynamik-Aussage — H₁/H₂ unbekannt jenseits der 2-Komplex-Grenze"
+    dyn_msg = (f"keine Dynamik-Aussage jenseits der 2-Komplex-Grenze ε={cap:.3f} — "
+               f"β₀={c} exakt; H₁/H₂ dafür nicht bestimmbar" +
+               (f"; garantiert {c}=1 bei ε={dmax:.2f} (voller Simplex)" if dmax is not None else ""))
     return row, msg, dims, masked, dyn_msg
+
+
+_PROBE_MAX_CORE: int = 200
+_PROBE_MAX_SIMPS: int = 40_000
+_PROBE_MAX_POINTS: int = 20
+
+
+def _dismantle_core(D: np.ndarray, eps: float, maxcore: int) -> list[int]:
+    """Homotopy-reduce the Rips FLAG complex at scale eps by removing dominated vertices
+    (closed neighbourhood N[v] ⊆ N[u] for a live neighbour u) -- EXACT homotopy-equivalence
+    of the clique complex: each single removal preserves the homotopy type (standard flag
+    complex / strong-collapse result), so the reduced core's homology IS the original's.
+    Sequential (not batched) removal keeps this provably sound -- dominated-ness is
+    re-checked against the CURRENT live graph after every removal. Fast on both extremes:
+    near-complete graphs melt (dense cells dominate fast) and sparse touches shrink
+    quickly; the caller rejects cores > maxcore only after the full collapse."""
+    n = int(D.shape[0])
+    eps_f = float(eps)
+    adj = [set(np.flatnonzero(D[v] <= eps_f).tolist()) - {v} for v in range(n)]
+    alive = [True] * n
+    while True:
+        removed_any = False
+        for v in range(n):
+            if not alive[v]:
+                continue
+            closed = adj[v] | {v}
+            for u in adj[v]:
+                if not alive[u]:
+                    continue
+                if closed.issubset(adj[u] | {u}):
+                    alive[v] = False
+                    removed_any = True
+                    break
+        if not removed_any:
+            break
+    return [v for v in range(n) if alive[v]]
+
+
+def _core_flag_betti(D: np.ndarray, core: list[int], eps: float, maxdim: int,
+                     maxsimps: int) -> list[int] | None:
+    """Betti of the flag complex on `core` at scale eps, computed on the FULL core complex
+    (cliques up to dim 3, so β₂ is measured with its tetrahedron-feed as in the pipeline).
+    None when the clique complex exceeds maxsimps simplices (too big)."""
+    cl = sorted(core)
+    k = len(cl)
+    sub = np.asarray(D[np.ix_(cl, cl)] <= float(eps), dtype=np.int64)
+    np.fill_diagonal(sub, 1)
+    simps: list[tuple[int, ...]] = []
+    vals: list[float] = []
+    dims: list[int] = []
+    for i in range(k):
+        simps.append((i,))
+        vals.append(0.0)
+        dims.append(0)
+    n_s = k
+    limit = min(maxdim + 1, 3)
+    if limit >= 1:
+        for i in range(k):
+            for j in range(i + 1, k):
+                if sub[i, j]:
+                    simps.append((i, j))
+                    vals.append(0.0)
+                    dims.append(1)
+                    n_s += 1
+    if n_s > maxsimps:
+        return None
+    if limit >= 2:
+        for i in range(k):
+            for j in range(i + 1, k):
+                if not sub[i, j]:
+                    continue
+                for l in range(j + 1, k):
+                    if sub[i, l] and sub[j, l]:
+                        simps.append((i, j, l))
+                        vals.append(0.0)
+                        dims.append(2)
+                        n_s += 1
+                        if n_s > maxsimps:
+                            return None
+    if limit >= 3:
+        for i in range(k):
+            for j in range(i + 1, k):
+                if not sub[i, j]:
+                    continue
+                for l in range(j + 1, k):
+                    if not (sub[i, l] and sub[j, l]):
+                        continue
+                    for m in range(l + 1, k):
+                        if sub[i, m] and sub[j, m] and sub[l, m]:
+                            simps.append((i, j, l, m))
+                            vals.append(0.0)
+                            dims.append(3)
+                            n_s += 1
+                            if n_s > maxsimps:
+                                return None
+    C = FilteredComplex(simps, np.array(vals, dtype=np.float64),
+                        np.array(dims, dtype=np.int64), "probe",
+                        {"core": k, "eps": float(eps)})
+    bc = persistent_homology(C)
+    b = [int(x) for x in bc.betti_at(0.0)]
+    return (b + [0] * (maxdim + 1 - len(b)))[:maxdim + 1]
+
+
+def _probe_homology(D: np.ndarray, eps: float, maxdim: int,
+                    maxcore: int = _PROBE_MAX_CORE,
+                    maxsimps: int = _PROBE_MAX_SIMPS) -> tuple[list[int] | None, str]:
+    """Try to compute EXACT β₀..β_top of the Rips complex at scale eps past the feasible
+    2-complex cap, via homotopy-reduction to a small core + exact homology of that core's
+    clique complex. Returns (betti_ok_or_None, prose_note)."""
+    core = _dismantle_core(D, eps, maxcore)
+    if len(core) == 0:
+        return [1] + [0] * maxdim, "leerer Kern (komplex ist kollabiert)"
+    if len(core) > maxcore:
+        return None, f"Kern noch {len(core)} Ecken — der 2-Komplex bleibt zu groß"
+    b = _core_flag_betti(D, core, eps, maxdim, maxsimps)
+    if b is None:
+        return None, f"Kern-Komplex über {maxsimps} Simplices — noch infeasibel"
+    return b, f"Kern {len(core)} Ecken"
 
 
 def _pca3(X: np.ndarray) -> np.ndarray:
@@ -435,8 +568,23 @@ def _topology_name(betti: list[int]) -> str:
         d = nz_pos[1][0]
         return (f"the disjoint union of {c} copies of S^{d} "
                 f"({c} separate components, each with its own H_{d})")
-    return (f"an unrecognized Betti signature ({v}) — "
-            "report the vector and its construction")
+    ncmp = v[0]
+    nz = [(d, b) for d, b in enumerate(v[1:], 1) if b]
+    if ncmp > 1:
+        if not nz:
+            return f"{ncmp} disjoint points / clusters (a wedge of {ncmp} copies of S⁰)"
+        lines = " · ".join(f"H_{d} = {b}" for d, b in nz)
+        return (f"{ncmp} separate components with {lines} -- "
+                f"an open/shredded state: no single space in the catalogue fits "
+                f"(a number for each H_d still requires its own closed cell complex)")
+    if len(nz) == 1:
+        d, b = nz[0]
+        return f"connected with {b} independent H_{d} (no fit in the catalogue)"
+    if nz:
+        parts = " · ".join(f"{b} H_{d}" for d, b in nz)
+        return (f"({ncmp} Komponente) mit {parts}: {ncmp} separate Zyklus-/Volumen-Töpfe -- "
+                f"kein katalogisierter Raum passt (offener Zustand)")
+    return f"an unrecognized Betti signature ({v}) — report the vector and its construction"
 
 
 def _reference_signatures() -> list[tuple[str, list[int]]]:
@@ -554,6 +702,19 @@ def _dynamics_name(betti: list[int]) -> str:
         return f"dynamics: a limit-cycle network with {v[1]} cycles"
     if len(v) >= 2 and v[0] == 1 and all(b == 0 for b in v[1:]):
         return "dynamics: one connected region free of cycles/holes — a single attracting point or basin (a sink)"
+    n0, n1, n2 = (int(v[0]), (int(v[1]) if len(v) > 1 else 0),
+                  (int(v[2]) if len(v) > 2 else 0))
+    if n0 > 1:
+        return (f"dynamics: {n0} coexisting basins"
+                + (f" ({n1} independent flow loops in total)" if n1 else "")
+                + (f", {n2} trapped regions" if n2 else "")
+                + " — multistability, no canonic attractor in the catalogue")
+    if n1 and not n2:
+        return (f"dynamics: {n1} independent cycles on one connected region — "
+                f"a cycle network / braided flow (no canonic signature)")
+    if n2:
+        return (f"dynamics: {n1} flow loops inside {n2} volume(s) on one connected region — "
+                f"a churning basin (no canonic signature)")
     return f"dynamics: unrecognized ({v}) — typically multistability or a high-dim manifold"
 
 
@@ -1287,13 +1448,54 @@ def build_payload(args: argparse.Namespace) -> dict[str, object]:
             hi = min(n_ui - 1, int(round(float(grid_ui[i]) / eps_cap * (n_ui - 1))))
             table_use[i] = [round(float(v), 5) for v in table[hi]]
             table_use[i][0] = round(float(comps[i]), 5)
+        # exact BEYOND-CAP probes via homotopy-reduction, scanning the TAIL downward from
+        # the largest ε (cores shrink monotonically with ε; stop at the first infeasible
+        # core -- everything below is at least as infeasible). Budget-bounded.
+        _Dmax = float(Dc_full.max())
+        probe_at: dict[int, tuple[list[int], str]] = {}
+        probe_why: dict[int, str] = {}
+        probe_budget = _PROBE_MAX_POINTS
+        probe_ok = True
+        for i in range(n_ui - 1, cap_idx, -1):
+            if probe_budget <= 0 or not probe_ok:
+                break
+            probe_budget -= 1
+            b, note = _probe_homology(Dc_full, float(grid_ui[i]), maxdim)
+            if b is not None:
+                probe_at[i] = (b, note)
+            else:
+                probe_why[i] = note
+                if note.startswith("Kern noch"):
+                    probe_ok = False
+
         for i in range(cap_idx + 1, n_ui):
             c = int(comps[i])
-            srow, tmsg, dss, mmsk, dmsg = _beyond_cap(c, maxdim, eps_cap)
-            sr.append(srow); tm.append(tmsg); tc.append([])
-            dm.append(dmsg); dc.append([]); dt.append("")
-            dsm.append(dss); mm.append(mmsk)
-            table_use[i][0] = round(float(comps[i]), 5)
+            if i in probe_at:
+                brow, note = probe_at[i]
+                row = (list(brow) + [0] * (maxdim + 1 - len(brow)))[:maxdim + 1]
+                row[0] = int(c)
+                tmsg = (_topology_name(row) + f" — exakt via Homotopie-Reduktion ({note})")
+                dmsg = _dynamics_name(row)
+                dss = _dimension_summaries(row, top_claimable)
+                mmsk = _masked_recognitions([row], maxdim)[0]
+                sr.append(row); tm.append(tmsg)
+                tc.append(_closest_topologies(row))
+                dm.append(dmsg); dc.append(_closest_dynamics(row))
+                prev = sr[-2] if len(sr) >= 2 else [1] + [0] * maxdim
+                dt.append(_dynamics_transition(prev, row))
+                dsm.append(dss); mm.append(mmsk)
+                table_use[i] = [round(float(v), 6) for v in row]
+                table_use[i][0] = round(float(comps[i]), 5)
+            else:
+                srow, tmsg, dss, mmsk, dmsg = _beyond_cap(
+                    c, maxdim, eps_cap, dmax=_Dmax, why=probe_why.get(i, ""))
+                sr.append(srow); tm.append(tmsg); tc.append([])
+                dm.append(dmsg); dc.append([]); dt.append("")
+                dsm.append(dss); mm.append(mmsk)
+                table_use[i][0] = round(float(comps[i]), 5)
+        if probe_at:
+            conn["probe_min"] = round(float(grid_ui[min(probe_at)]), 5)
+            conn["probe_max"] = round(float(grid_ui[max(probe_at)]), 5)
         struct_rows, topo_messages, topo_closest = sr, tm, tc
         dyn_messages, dyn_closest, dyn_transitions = dm, dc, dt
         dim_summaries, masked_messages = dsm, mm
@@ -2518,7 +2720,10 @@ function render(){
   } else {
     let extra = "";
     if (CONN && eps > CONN.cap - 1e-9){
-      extra = "  ·  jenseits der 2-Komplex-Grenze: nur β₀ (1-Skelett)";
+      if (CONN.probe_min != null && eps >= CONN.probe_min - 1e-9)
+        extra = "  ·  exakt via Homotopie-Reduktion (Kern-Komplex)";
+      else
+        extra = "  ·  jenseits der 2-Komplex-Grenze: nur β₀ (1-Skelett)";
       if (CONN.merge != null && eps >= CONN.merge) extra += "  ·  β₀=1 ✓ zusammenhängend";
       else if (CONN.merge_beyond != null) extra += `  ·  mergt erst bei ε≈${CONN.merge_beyond.toFixed(3)}`;
     }
