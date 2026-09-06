@@ -2623,6 +2623,7 @@ function renderScene(){
       for (let n=0; n<faceOrder.length; n+=STP){
         const i = faceOrder[n];
         const f = F[i]; if (f[3] > eps) continue;
+        if (skipDense && f[3] < denseCap - 1e-6) continue;
         const base = colormap(f[3]/EMAX);
         let col = base;
         if (shade){
