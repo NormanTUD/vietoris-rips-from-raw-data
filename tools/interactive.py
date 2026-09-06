@@ -1689,6 +1689,31 @@ def build_payload(args: argparse.Namespace) -> dict[str, object]:
            f"ε_max = {eps_cap:.3f}" + (f"  ·  β₀ bis ε={eps_ui:.2f} (1-Skelett), β₁₂ nur "
            f"bis ε={eps_cap:.2f}" if ext else "") + (f"  ·  target β = {target}" if target else ""))
 
+    # ---- slider "go to" marks for KNOWN topological structures -----------------
+    # The cloud's geometry is recognized cheaply (torus grid / round shell / blob);
+    # recognized spots get clickable chips on the slider. Beyond the 2-complex cap
+    # the raw Rips numbers are honest unknowns, so the recognized structure's
+    # CANONICAL Betti vector is also offered there, clearly labeled as recognition.
+    rec_label, rec_beta = _recognize_structure(raw_cloud, shell_facts, maxdim)
+    marks: list[dict[str, object]] = []
+    if C.kind == "rips":
+        if conn and conn.get("merge") is not None:
+            marks.append({"eps": round(float(conn["merge"]), 5),
+                          "label": "zusammenhängend (β₀=1)",
+                          "beta": [1] + [None] * maxdim, "src": "computed"})
+        if rec_label and rec_beta is not None:
+            rec_eps = float(C.params.get("render_dense", eps_cap))
+            if rec_eps + 1e-9 > eps_ui:
+                rec_eps = eps_ui
+            marks.append({"eps": round(rec_eps, 5), "label": rec_label,
+                          "beta": rec_beta, "src": "recognized"})
+        if maxdim >= 2 and eps_ui + 1e-9 >= float(C.params.get("dmax", eps_ui)) * 0.999:
+            marks.append({"eps": round(float(eps_ui), 5),
+                          "label": "voller Komplex",
+                          "beta": [1] + [0] * maxdim, "src": "recognized"})
+    # sort by epsilon so the chips read left-to-right with the slider
+    marks.sort(key=lambda m: float(m["eps"]))
+
     return {
         "mode": "filtration",
         "title": title,
@@ -1720,6 +1745,9 @@ def build_payload(args: argparse.Namespace) -> dict[str, object]:
         "feat_route": feat_route,
         "shell_facts": shell_facts,
         "intervals": intervals,
+        "recognized": ({"label": rec_label, "beta": rec_beta}
+                       if rec_label and rec_beta is not None else None),
+        "marks": marks,
     }
 
 
@@ -1859,6 +1887,30 @@ def _prominent_intervals(bc: Barcode, eps_max: float, maxdim: int,
                 keep = []
         out[d] = keep
     return out
+
+
+def _recognize_structure(X: np.ndarray, shell_facts: dict[str, object] | None,
+                         maxdim: int) -> tuple[str | None, list[int] | None]:
+    """Recognize a KNOWN topological structure from the cloud GEOMETRY (not from a
+    huge infeasible Rips complex): regular torus grid / fitted torus -> T² ; a round
+    shell -> its tangent dimension (1 -> circle/pinched S¹, 2 -> sphere S²). The
+    structure's CANONICAL Betti vector is returned as the "recognized" answer the
+    UI can show where raw computation is infeasible (labeled as recognition, never
+    confused with a computed value)."""
+    if maxdim >= 2 and X.shape[1] >= 3 and np.isfinite(X).all():
+        try:
+            fit = _torus_fit(X)
+        except ValueError:
+            fit = None
+        if fit is not None:
+            nu, nv, R, r = fit
+            return (f"Torus T² ({nu}×{nv}·R={R:.2f}, r={r:.2f})", [1, 2, 1])
+        if shell_facts and int(shell_facts["tangent"]) == 2:
+            Rf = float(shell_facts["R"])
+            return (f"Kugel/rundshell S² (R≈{Rf:.2f})", [1, 0, 1])
+    if maxdim >= 2 and shell_facts and int(shell_facts["tangent"]) == 1:
+        return ("Kreis randshell S¹", [1, 1])
+    return (None, None)
 
 
 def _shell_facts(X: np.ndarray, rms_tol: float = 0.20,
@@ -2161,6 +2213,16 @@ TEMPLATE = r"""<!DOCTYPE html>
   button:hover { background:#283241; }
   input[type=range] { flex: 1; min-width: 160px; accent-color: #4ea1ff; }
   #eps-readout { font-variant-numeric: tabular-nums; font-size: 13px; color: var(--mut); min-width: 130px; }
+  #marks { display:flex; flex-wrap:wrap; gap:6px; margin-top:8px; font-size:11.5px; }
+  .mark { cursor:pointer; user-select:none; padding:3px 9px; border-radius:999px;
+          border:1px solid var(--line); background:var(--panel); color:var(--txt); }
+  .mark:hover { border-color:#4ea1ff; }
+  .mark.rec { border-color:#d39b52; color:#f0c674; }
+  .mark.active { border-color:#4ea1ff; box-shadow:0 0 0 1px #4ea1ff inset; }
+  .mark .mb { font-weight:700; color:#9adcff; margin-left:4px; }
+  .card.rec { border-color:#d39b52; }
+  .card.rec::after { content:"erkannt"; display:block; font-size:9px; color:#d39b52;
+                     text-align:center; margin-top:2px; letter-spacing:.5px; }
   .toggle { display:flex; align-items:center; gap:5px; font-size: 12.5px; color: var(--mut); cursor:pointer; user-select:none; }
   #badge { font-size: 11.5px; color:#2ea043; font-weight:650; }
   #dynbadge { font-size: 11.5px; color:#d39b52; font-weight:600; margin-left: 10px; }
@@ -2231,6 +2293,7 @@ TEMPLATE = r"""<!DOCTYPE html>
     <input type="range" id="slider" min="0" max="1000" value="0">
     <div id="eps-readout"></div>
   </div>
+  <div id="marks"></div>
   <div id="errbox">
     <h4 id="err-title"></h4>
     <pre id="err-body"></pre>
@@ -2278,6 +2341,10 @@ let fitR = 1.0;
 // Cached depth (painter's) order of the faces. It depends only on the view
 // (rx, ry), never on eps, so we recompute it only when the view rotates.
 let faceOrder = null, faceOrderKey = "";
+// Per-face shaded colours are cached too: they depend only on the view (and fitR),
+// NOT on the slider, so a slider drag must not re-shade every face every frame.
+// (That was very slow at ~250k faces.) Cleared whenever the view key changes.
+let shadeCache = null;
 
 const scene = document.getElementById("scene"), sctx = scene.getContext("2d");
 const bfun  = document.getElementById("bfun"),  bctx = bfun.getContext("2d");
@@ -2451,15 +2518,27 @@ function renderScene(){
              - (proj[fb[0]][2]+proj[fb[1]][2]+proj[fb[2]][2]);
       });
       faceOrderKey = vkey;
+      shadeCache = null;   // shaded colours change with the view too
     }
+    if (!shadeCache) shadeCache = new Map();
     const alpha = shade ? 0.6 : 0.16;
+    // A dense display mesh (up to a few 100k faces) is too heavy to redraw fully on
+    // every slider frame, so stride-subsample it: still statistically fills the view,
+    // bounded draw cost no matter how big the mesh gets.
+    const DRAW_CAP = 60000;
+    const STP = F.length > DRAW_CAP ? Math.ceil(F.length / DRAW_CAP) : 1;
     if (F.length <= 2000){
       // small mesh: one path per face (keeps the crisp per-face wireframe)
       sctx.lineWidth = 0.6;
-      for (const i of faceOrder){
+      for (let n=0; n<faceOrder.length; n+=STP){
+        const i = faceOrder[n];
         const f = F[i]; if (f[3] > eps) continue;
         const base = colormap(f[3]/EMAX);
-        const col = shade ? shadeColor(proj[f[0]],proj[f[1]],proj[f[2]],base,fitR) : base;
+        let col = base;
+        if (shade){
+          col = shadeCache.get(i);
+          if (!col){ col = shadeColor(proj[f[0]],proj[f[1]],proj[f[2]],base,fitR); shadeCache.set(i, col); }
+        }
         sctx.beginPath();
         sctx.moveTo(scr[f[0]][0], scr[f[0]][1]);
         sctx.lineTo(scr[f[1]][0], scr[f[1]][1]);
@@ -2473,10 +2552,15 @@ function renderScene(){
       // dense mesh: bucket faces by quantised colour and issue ONE fill per bucket
       // (41k individual fills -> a few hundred), which keeps shading but is fast.
       const buckets = new Map();
-      for (const i of faceOrder){
+      for (let n=0; n<faceOrder.length; n+=STP){
+        const i = faceOrder[n];
         const f = F[i]; if (f[3] > eps) continue;
         const base = colormap(f[3]/EMAX);
-        const col = shade ? shadeColor(proj[f[0]],proj[f[1]],proj[f[2]],base,fitR) : base;
+        let col = base;
+        if (shade){
+          col = shadeCache.get(i);
+          if (!col){ col = shadeColor(proj[f[0]],proj[f[1]],proj[f[2]],base,fitR); shadeCache.set(i, col); }
+        }
         const key = (((col[0]|0)>>5)&7)*64 + (((col[1]|0)>>5)&7)*8 + (((col[2]|0)>>5)&7);
         let g = buckets.get(key);
         if (!g){ g = {col: col, faces: []}; buckets.set(key, g); }
@@ -2858,14 +2942,32 @@ function renderSyst(){
   s.innerHTML = html;
 }
 
+function effectiveBeta(eps, row){
+  // Beyond the 2-complex cap the raw Rips higher-dim numbers are honestly null
+  // ("…"). If the cloud's geometry was RECOGNIZED as a known structure (torus /
+  // sphere / circle), fill those nulls with its canonical Betti vector, clearly
+  // badged as recognition (a model answer, never confused with a computation).
+  if (!DATA.recognized || !(eps > HOM + 1e-9)) return {row: row, rec: false};
+  const hasAny = row.some(v => typeof v === "number" && Number.isFinite(v));
+  if (hasAny) return {row: row, rec: false};
+  const rb = DATA.recognized.beta;
+  const filled = row.slice();
+  for (let d = 0; d < filled.length; d++){
+    if (d < rb.length) filled[d] = rb[d]; else filled[d] = 0;
+  }
+  return {row: filled, rec: true};
+}
+
 function updateCards(){
   if (MODE === "filtration"){
     const mask = activeMask();
     const b = bettiAt(eps);
     const ki = Math.max(0, Math.min((DATA.struct_rows || []).length - 1,
                                     Math.round(eps / EMAX * ((DATA.struct_rows || []).length - 1))));
+    const efb = effectiveBeta(eps, b);
+    const bShow = efb.row;
     for (let d=0; d<=MD; d++){
-      const v = b[d];
+      const v = bShow[d];
       cardNums[d].textContent = (v == null || Number.isNaN(v)) ? "…" : v;
       cardNums[d].style.color = DIM_COLOR[d];
       cardNums[d].style.opacity = (v == null || Number.isNaN(v)) ? 0.45 : 1;
@@ -2882,13 +2984,16 @@ function updateCards(){
           .every((v, i) => v === DATA.target[i]) : false;
     const msg = maskedMsg(DATA.masked_messages && DATA.masked_messages[ki], mask);
     const check = fullOK && mask === fullMask;
-    badge.textContent = (check ? "✓ " : "") +
+    const recTag = efb.rec ? (DATA.recognized.label ? "【erkannt: " + DATA.recognized.label + "】 " : "【erkannte Struktur】") : "";
+    badge.textContent = recTag + (check ? "✓ " : "") +
       (mask !== fullMask ? maskLabel(mask) + " " : "") + firstClause(msg);
     badge.title = "Topology — aktive Dimensionen " + maskLabel(mask) +
       "\n" + (msg || "(keine aktive Dimension)") +
+      (DATA.recognized ? "\n\nerkannte Struktur (Modell): " + DATA.recognized.label +
+        "  β=[" + DATA.recognized.beta.join(", ") + "]" : "") +
       "\n\nFeature (volle Struktur, " + (DATA.feat_route || "?") + "):\n" + DATA.topo_feature +
       "\n\nFeature β = [" + DATA.feat_row.join(", ") + "]";
-    dynBadge.textContent = firstClause((DATA.dyn_messages && DATA.dyn_messages[ki]) || "");
+    dynBadge.textContent = recTag + firstClause((DATA.dyn_messages && DATA.dyn_messages[ki]) || "");
     dynBadge.title = "Dynamics bei ε = " + eps.toFixed(3) +
       ":\n" + ((DATA.dyn_messages && DATA.dyn_messages[ki]) || "") +
       "\n\nFeature (volle Struktur, " + (DATA.feat_route || "?") + "):\n" + DATA.dyn_feature;
@@ -2900,8 +3005,12 @@ function updateCards(){
     for (let d=0; d<=MD; d++){
       const c = cards[d]; if (!c) continue;
       c.style.display = dimsOn[d] ? "" : "none";
-      c.title = dimCardNote(ki, d);
+      c.title = (efb.rec && DATA.recognized
+                   ? "erkannte Struktur: " + DATA.recognized.label +
+                     "  β=[" + DATA.recognized.beta.join(", ") + "]\n" : "") +
+                dimCardNote(ki, d);
       c.classList.toggle("match", matchAll);
+      c.classList.toggle("rec", !!efb.rec);
     }
     // Guardrail: at the top of the computable range (HOM, the 2-complex cap) the
     // computed Betti vector MUST equal the declared target. A mismatch is a loud
@@ -2958,6 +3067,7 @@ function render(){
   if (MODE === "trajectory"){ renderTrajScene(); renderConv(); renderBfunTraj(); }
   else { renderScene(); renderDiagram(); renderBarcode(); renderBfun(); }
   updateCards();
+  updateMarksActive();
   const ro = document.getElementById("eps-readout");
   if (MODE === "trajectory"){
     const li = Math.max(0, Math.min(N_L-1, Math.round(t)));
@@ -2986,6 +3096,35 @@ slider.addEventListener("input", () => {
   if (MODE === "trajectory") t = +slider.value; else eps = +slider.value/1000*EMAX;
   render();
 });
+// ---- slider go-to marks: click a chip to jump the filtration to that ε ---------
+const marksWrap = document.getElementById("marks");
+const MARK_EPS = (DATA.marks || []).filter(m => MODE === "filtration");
+function buildMarks(){
+  marksWrap.innerHTML = "";
+  for (const m of MARK_EPS){
+    const b = (m.beta || []).map(v => v == null ? "…" : v).join(",");
+    const chip = document.createElement("button");
+    chip.type = "button";
+    chip.className = "mark" + (m.src === "recognized" ? " rec" : "");
+    chip.innerHTML = `<span>${m.label}</span><span class="mb">β=[${b}]</span>`;
+    chip.addEventListener("click", () => {
+      stopPlay();
+      eps = Math.max(0, Math.min(EMAX, m.eps));
+      setSlider(); render();
+    });
+    marksWrap.appendChild(chip);
+  }
+}
+function updateMarksActive(){
+  if (!MARK_EPS.length) return;
+  let best = -1, bd = Infinity;
+  MARK_EPS.forEach((m, i) => {
+    const d = Math.abs(eps - m.eps);
+    if (d < bd){ bd = d; best = i; }
+  });
+  const active = (best >= 0 && bd <= Math.max(0.01, 0.02 * EMAX));
+  marksWrap.childNodes.forEach((ch, i) => ch.classList.toggle("active", active && i === best));
+}
 const playBtn = document.getElementById("play");
 function stopPlay(){ playing=false; if(raf) cancelAnimationFrame(raf); playBtn.textContent="▶ Play"; }
 function tick(now){
@@ -3045,6 +3184,7 @@ scene.addEventListener("wheel", e=>{
 // ---- go ------------------------------------------------------------------
 fitAll();
 if (MODE === "trajectory"){ buildLegend(); t = N_L-1; }
+buildMarks();
 setSlider();
 render();
 </script>
