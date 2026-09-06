@@ -186,25 +186,25 @@ def _build_rips_safe(X: np.ndarray, D: np.ndarray, eps_max: float, max_dim: int,
 # lets the user opt into a larger (slower, more complete) complex, capped at the MAX
 # budget. Both sit below the hard infeasibility wall (~300k simplices) where the
 # pure-Python homology and the browser both choke.
-_FEASIBLE_DEFAULT_BUDGET: int = 100_000
 _FEASIBLE_MAX_BUDGET: int = 160_000
 _FEASIBLE_RES: float = 1e-3
 
 
 def _max_feasible_eps(X: np.ndarray, D: np.ndarray, eps_hi: float,
-                      budget: int, lo: float = 0.0, iters: int = 0) -> float:
+                      budget: int, lo: float = 0.0,
+                      iters: int = 0, res: float = _FEASIBLE_RES) -> float:
     """SAFEGUARD (feasibility): the largest eps in [lo, eps_hi] at which build_rips
     (max_dim=2) keeps <= budget simplices. The simplex count is monotone non-decreasing
     in eps, so a binary search finds it. Each probe is capped at `budget` simplices
     (max_simplices=budget) so an infeasible eps fails fast instead of building toward the
     2M hard cap. This lets the --points slider span the FULL max-pairwise-distance (Dmax)
     when feasible, and cap at the largest feasible epsilon otherwise (reported, no crash).
-    iters defaults to ~1e-3 absolute resolution over [0, eps_hi] (fixed 6 was far too
+    iters defaults to `res` absolute resolution over [0, eps_hi] (fixed 6 was far too
     coarse once the requested range grew)."""
     lo = float(lo)
     hi = float(eps_hi)
     if iters <= 0:
-        iters = max(8, math.ceil(math.log2(max(hi, 1e-9) / _FEASIBLE_RES)) + 1)
+        iters = max(8, math.ceil(math.log2(max(hi, 1e-9) / float(res))) + 1)
     try:
         if build_rips(X, D, hi, max_dim=2, max_simplices=budget).n_simplices <= budget:
             return hi  # the full range up to Dmax is feasible
@@ -351,6 +351,10 @@ def _dismantle_core(D: np.ndarray, eps: float, maxcore: int) -> list[int]:
     return [v for v in range(n) if alive[v]]
 
 
+_DISMANTLE_MAX_N: int = 4000        # beyond this the sequential reduction is too slow
+_DISMANTLE_MAX_ENTS: int = 8_000_000   # adjacency-entry budget (memory guard for dense graphs)
+
+
 def _core_flag_betti(D: np.ndarray, core: list[int], eps: float, maxdim: int,
                      maxsimps: int) -> list[int] | None:
     """Betti of the flag complex on `core` at scale eps, computed on the FULL core complex
@@ -418,16 +422,31 @@ def _core_flag_betti(D: np.ndarray, core: list[int], eps: float, maxdim: int,
 
 def _probe_homology(D: np.ndarray, eps: float, maxdim: int,
                     maxcore: int = _PROBE_MAX_CORE,
-                    maxsimps: int = _PROBE_MAX_SIMPS) -> tuple[list[int] | None, str]:
+                    maxsimps: int = _PROBE_MAX_SIMPS,
+                    max_n: int = _DISMANTLE_MAX_N,
+                    max_ents: int = _DISMANTLE_MAX_ENTS
+                    ) -> tuple[list[int] | None, str]:
     """Try to compute EXACT β₀..β_top of the Rips complex at scale eps past the feasible
     2-complex cap, via homotopy-reduction to a small core + exact homology of that core's
-    clique complex. Returns (betti_ok_or_None, prose_note)."""
-    core = _dismantle_core(D, eps, maxcore)
+    clique complex. Returns (betti_ok_or_None, prose_note). Memory-guarded: the density
+    check uses only O(n²) numpy row-counts, never per-row Python sets, so huge/dense
+    point clouds are refused instead of exhausting RAM."""
+    n = int(D.shape[0])
+    if n > max_n:
+        return None, f"Wolke zu groß für die Homotopie-Reduktion ({n} Punkte)"
+    Df = np.asarray(D, dtype=np.float64)
+    eps_f = float(eps)
+    deg_rows = np.count_nonzero(Df <= eps_f, axis=1)
+    n_ents = int(deg_rows.sum()) - n
+    if n_ents > max_ents:
+        return None, (f"ε-Nachbarschaft zu dicht für die Reduktion "
+                      f"({n_ents} Nachbarschaftseinträge)")
+    core = _dismantle_core(Df, eps_f, maxcore)
     if len(core) == 0:
         return [1] + [0] * maxdim, "leerer Kern (komplex ist kollabiert)"
     if len(core) > maxcore:
         return None, f"Kern noch {len(core)} Ecken — der 2-Komplex bleibt zu groß"
-    b = _core_flag_betti(D, core, eps, maxdim, maxsimps)
+    b = _core_flag_betti(Df, core, eps_f, maxdim, maxsimps)
     if b is None:
         return None, f"Kern-Komplex über {maxsimps} Simplices — noch infeasibel"
     return b, f"Kern {len(core)} Ecken"
@@ -1123,7 +1142,8 @@ def build_source(args: argparse.Namespace) -> tuple[FilteredComplex, np.ndarray,
         # simplices -> the browser and the pure-Python homology both choke). We cap at
         # the largest FEASIBLE epsilon and say so. This is not ignoring --eps-max: it is
         # the largest value that can actually be built. Sparse clouds reach Dmax in full.
-        eps_max = _max_feasible_eps(X, D, eps_hi, budget=_FEASIBLE_MAX_BUDGET)
+        eps_max = _max_feasible_eps(X, D, eps_hi, budget=args.feasible_budget,
+                                    res=args.feasible_res)
         if eps_max < eps_hi - 1e-9:
             console.print(f"[yellow]NOTE: the 2-complex up to ε={eps_hi:.3f} is infeasible "
                           f"for this {X.shape[0]}-pt cloud (millions of simplices); only the "
@@ -1201,7 +1221,8 @@ def build_source(args: argparse.Namespace) -> tuple[FilteredComplex, np.ndarray,
         eps_hi = eps_max
     else:
         eps_hi = float(D.max())
-        eps_max = _max_feasible_eps(X, D, eps_hi, budget=_FEASIBLE_MAX_BUDGET)
+        eps_max = _max_feasible_eps(X, D, eps_hi, budget=args.feasible_budget,
+                                    res=args.feasible_res)
         if eps_max < eps_hi - 1e-9:
             console.print(f"[yellow]NOTE: the 2-complex up to ε={eps_hi:.3f} is infeasible "
                           f"for this {X.shape[0]}-pt Rips complex; only the 2-complex is "
@@ -1454,18 +1475,23 @@ def build_payload(args: argparse.Namespace) -> dict[str, object]:
         _Dmax = float(Dc_full.max())
         probe_at: dict[int, tuple[list[int], str]] = {}
         probe_why: dict[int, str] = {}
-        probe_budget = _PROBE_MAX_POINTS
+        probe_budget = args.probe_points
         probe_ok = True
         for i in range(n_ui - 1, cap_idx, -1):
             if probe_budget <= 0 or not probe_ok:
                 break
             probe_budget -= 1
-            b, note = _probe_homology(Dc_full, float(grid_ui[i]), maxdim)
+            b, note = _probe_homology(Dc_full, float(grid_ui[i]), maxdim,
+                                      maxcore=args.probe_max_core,
+                                      maxsimps=args.probe_max_simps,
+                                      max_n=args.probe_max_n,
+                                      max_ents=args.probe_max_ents)
             if b is not None:
                 probe_at[i] = (b, note)
             else:
                 probe_why[i] = note
-                if note.startswith("Kern noch"):
+                if (note.startswith("Kern noch") or note.startswith("Wolke zu groß")
+                        or note.startswith("ε-Nachbarschaft zu dicht")):
                     probe_ok = False
 
         for i in range(cap_idx + 1, n_ui):
@@ -2914,6 +2940,28 @@ def main() -> int:
                    help="slider reaches at least this many x the connectivity threshold, so at max "
                         "epsilon all points form one connected complex (default 1.2). Use 0 to disable.")
     p.add_argument("--n-grid", type=int, default=140, help="epsilon grid resolution for Betti curve / slider")
+    p.add_argument("--feasible-budget", type=int, default=_FEASIBLE_MAX_BUDGET,
+                   help="max simplices in binary-search feasibility probes used to auto-cap "
+                        "the epsilon slider (default %(default)s)")
+    p.add_argument("--feasible-res", type=float, default=_FEASIBLE_RES,
+                   help="absolute epsilon resolution of the feasibility-cap binary search "
+                        "(default %(default)s)")
+    p.add_argument("--probe-max-core", type=int, default=_PROBE_MAX_CORE,
+                   help="max vertices of the reduced core for an exact far-tail homology "
+                        "probe past the 2-complex cap (default %(default)s)")
+    p.add_argument("--probe-max-simps", type=int, default=_PROBE_MAX_SIMPS,
+                   help="max simplices of the reduced core's clique complex for an exact "
+                        "far-tail probe (default %(default)s)")
+    p.add_argument("--probe-points", type=int, default=_PROBE_MAX_POINTS,
+                   help="max number of far-tail probes past the 2-complex cap "
+                        "(default %(default)s)")
+    p.add_argument("--probe-max-n", type=int, default=_DISMANTLE_MAX_N,
+                   help="skip homotopy-reduction probes for clouds larger than this many "
+                        "points (default %(default)s)")
+    p.add_argument("--probe-max-ents", type=int, default=_DISMANTLE_MAX_ENTS,
+                   help="adjacency-entry budget (memory guard) for a homotopy-reduction "
+                        "probe; dense graphs above this are skipped as infeasible "
+                        "(default %(default)s)")
     p.add_argument("--title", default="")
     p.add_argument("--out", default="interactive.html", help="output HTML file")
     args = p.parse_args()
