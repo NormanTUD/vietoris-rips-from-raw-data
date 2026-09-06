@@ -1,6 +1,6 @@
 # /// script
 # requires-python = ">=3.10"
-# dependencies = ["numpy>=1.26", "beartype>=0.18", "rich>=13"]
+# dependencies = ["numpy>=1.26", "scipy>=1.11", "beartype>=0.18", "rich>=13"]
 # ///
 """Build a self-contained interactive HTML/JS file for exploring TDA.
 
@@ -218,36 +218,79 @@ _FEASIBLE_RES: float = 1e-3
 _RENDER_MAX_BUDGET: int = 300_000   # separate display mesh: what you SEE is a richer complex
 
 
+def _convex_hull_skin(X: np.ndarray, D: np.ndarray,
+                      C_render: FilteredComplex) -> FilteredComplex:
+    """Append the point cloud's CONVEX-HULL surface to a display complex so the very
+    top of the slider shows a closed, hole-free "everything connected" body -- the
+    faithful picture of the full simplex / contractible β reading. The affine hull of
+    a lower-dimensional cloud degenerates Qhull (hyperplane-parallel); that case is
+    caught and returns the dense mesh unchanged."""
+    try:
+        from scipy.spatial import ConvexHull, QhullError
+        if D.shape[0] < 4 or X.shape[1] != 3:
+            return C_render
+        hull = ConvexHull(X)
+    except (QhullError, ImportError, Exception):
+        return C_render
+    existing = set(C_render.simplexes)
+    dmax = float(D.max())
+    added_edges: list[tuple[int, ...]] = []
+    added_faces: list[tuple[int, ...]] = []
+    for tri in hull.simplices:
+        a, b, c = (int(t) for t in tri)
+        trip = (a, b, c)
+        for e in ((a, b), (a, c), (b, c)):
+            if e not in existing:
+                added_edges.append(e); existing.add(e)
+        if trip not in existing:
+            added_faces.append(trip); existing.add(trip)
+    if not added_edges and not added_faces:
+        return C_render
+    simp = list(C_render.simplexes) + added_edges + added_faces
+    val = list(C_render.values) + [dmax] * len(added_edges) + [dmax] * len(added_faces)
+    dim = list(C_render.dims) + [1] * len(added_edges) + [2] * len(added_faces)
+    params = dict(C_render.params)
+    return FilteredComplex(simp, np.asarray(val, dtype=float),
+                           np.asarray(dim, dtype=np.int64), C_render.kind, params)
+
+
 def _attach_render_complex(C: FilteredComplex, X: np.ndarray, D: np.ndarray,
                            eps_max: float, eps_hi: float,
                            args: argparse.Namespace) -> FilteredComplex:
     """Decouple WHAT WE DRAW from WHAT WE MEASURE. The homology cap `eps_max` (≈160k
     simplices) is far below the scale where a dense bagel's surface fills in, so the
-    3D view would always look holey. Build a SEPARATE display mesh up to the largest ε
-    whose 2-complex stays under --render-budget simplices (max_dim=2 only -- the β
-    numbers never come from this complex). Stored on C.params as 'render'/'eps_render';
-    the returned complex is the display complex (falls back to C when not worth it)."""
+    3D view would always look holey. Build a SEPARATE display mesh that spans the
+    WHOLE slider range `eps_hi`:
+      * an ordinary Rips 2-complex revealed up to the densest feasible ε (per
+        --render-budget), and
+      * the cloud's CONVEX-HULL surface appended with birth = Dmax, so dragging to
+        the top ε actually renders a closed, hole-free "everything connected" body
+        (coherent with the full-simplex/contractible β reading). The β numbers never
+        come from this display mesh. Stored on C.params as 'render'/'eps_render';
+        the returned complex is the display complex (falls back to C when not
+        worthwhile)."""
     if C.kind != "rips":
         C.params["render"] = C
         C.params["eps_render"] = float(eps_max)
         return C
     eps_hi = float(eps_hi)
     if eps_hi <= eps_max + 1e-9:
+        # the whole slider range is already feasible: the homology complex spans it
         C.params["render"] = C
-        C.params["eps_render"] = float(eps_max)
+        C.params["render_dense"] = float(eps_max)
+        C.params["eps_render"] = float(eps_hi)
         return C
-    eps_render = _max_feasible_eps(X, D, eps_hi, budget=args.render_budget,
-                                   res=args.feasible_res)
-    if eps_render <= eps_max + 1e-9:
-        C.params["render"] = C
-        C.params["eps_render"] = float(eps_max)
-        return C
-    with _rich_ui.timed(console, f"Display mesh ε={eps_render:.3f} (≤{args.render_budget} simplices)"):
-        C_render = build_rips(X, D, eps_render, max_dim=2,
-                              max_simplices=args.render_budget * 2)
-    C.params["render"] = C_render
-    C.params["eps_render"] = float(eps_render)
-    return C_render
+    eps_dense = _max_feasible_eps(X, D, eps_hi, budget=args.render_budget,
+                                  res=args.feasible_res)
+    with _rich_ui.timed(console, f"Display mesh: Rips ε≤{eps_dense:.3f} "
+                                 f"(≤{args.render_budget} simplices)"):
+        C_render = build_rips(X, D, eps_dense, max_dim=2,
+                              max_simplices=max(args.render_budget * 2, 10_000))
+    hull = _convex_hull_skin(X, D, C_render)
+    C.params["render"] = hull
+    C.params["render_dense"] = float(eps_dense)
+    C.params["eps_render"] = float(eps_hi)   # the view now spans the whole slider
+    return hull
 
 
 def _max_feasible_eps(X: np.ndarray, D: np.ndarray, eps_hi: float,
@@ -1525,6 +1568,7 @@ def build_payload(args: argparse.Namespace) -> dict[str, object]:
         conn = {"merge": round(float(grid_ui[merge_idx]), 5) if merge_idx is not None else None,
                 "cap": round(float(eps_cap), 5),
                 "render": round(float(C.params.get("eps_render", eps_cap)), 5),
+                "render_dense": round(float(C.params.get("render_dense", eps_cap)), 5),
                 "max": round(float(eps_ui), 5)}
         if merge_idx is None and _Dmax > eps_ui + 1e-9:
             # the cloud merges beyond the requested ceiling -- find where, so we can tell
@@ -2205,10 +2249,11 @@ const EMAX = (DATA.eps_ui || HOM);
 const MD = DATA.maxdim || 0;
 const P = DATA.points || [], E = DATA.edges || [], F = DATA.faces || [], IV = DATA.intervals || [];
 const CONN = DATA.conn || null;
-// RENDER_MAX = the largest ε the 3D view actually draws to (the server's display mesh
-// budget, shipped as conn.render). β stays exact only to HOM (conn.cap); between HOM
-// and RENDER_MAX the surface fills in visually while the numbers honestly go H₀-only.
-const RENDER_MAX = (CONN && CONN.render) ? CONN.render : Math.min(EMAX, HOM);
+// RENDER_DENSE = the largest ε the 3D view draws the DENSE Rips 2-complex to
+// (server's --render-budget cap, shipped as conn.render_dense). The convex-hull
+// skin closes the body at the far end, so the slider still renders out to EMAX.
+// β stays exact only to HOM (conn.cap); beyond that the numbers honestly go H₀-only.
+const RENDER_DENSE = (CONN && CONN.render_dense) ? CONN.render_dense : Math.min(EMAX, HOM);
 const GRID = (DATA.betti && DATA.betti.grid) || [0,1];
 const TABLE = (DATA.betti && DATA.betti.table) || [[0]];
 
@@ -2408,22 +2453,19 @@ function renderScene(){
       faceOrderKey = vkey;
     }
     const alpha = shade ? 0.6 : 0.16;
-    // Beyond the 2-complex cap only the cap-limited subcomplex exists -- dim it.
-    const capDim = (CONN && eps > RENDER_MAX + 1e-9 && CONN.max > CONN.cap + 1e-9);
-    const alphaUse = capDim ? alpha * 0.35 : alpha;
     if (F.length <= 2000){
       // small mesh: one path per face (keeps the crisp per-face wireframe)
       sctx.lineWidth = 0.6;
       for (const i of faceOrder){
         const f = F[i]; if (f[3] > eps) continue;
-        const base = colormap(f[3]/RENDER_MAX);
+        const base = colormap(f[3]/EMAX);
         const col = shade ? shadeColor(proj[f[0]],proj[f[1]],proj[f[2]],base,fitR) : base;
         sctx.beginPath();
         sctx.moveTo(scr[f[0]][0], scr[f[0]][1]);
         sctx.lineTo(scr[f[1]][0], scr[f[1]][1]);
         sctx.lineTo(scr[f[2]][0], scr[f[2]][1]);
         sctx.closePath();
-        sctx.fillStyle = rgba(col, alphaUse);
+        sctx.fillStyle = rgba(col, alpha);
         sctx.fill();
         if (shade){ sctx.strokeStyle = rgba(col, 0.85); sctx.stroke(); }
       }
@@ -2433,7 +2475,7 @@ function renderScene(){
       const buckets = new Map();
       for (const i of faceOrder){
         const f = F[i]; if (f[3] > eps) continue;
-        const base = colormap(f[3]/RENDER_MAX);
+        const base = colormap(f[3]/EMAX);
         const col = shade ? shadeColor(proj[f[0]],proj[f[1]],proj[f[2]],base,fitR) : base;
         const key = (((col[0]|0)>>5)&7)*64 + (((col[1]|0)>>5)&7)*8 + (((col[2]|0)>>5)&7);
         let g = buckets.get(key);
@@ -2441,7 +2483,7 @@ function renderScene(){
         g.faces.push(f);
       }
       for (const g of buckets.values()){
-        sctx.fillStyle = rgba(g.col, alphaUse);
+        sctx.fillStyle = rgba(g.col, alpha);
         sctx.beginPath();
         for (const f of g.faces){
           sctx.moveTo(scr[f[0]][0], scr[f[0]][1]);
@@ -2459,25 +2501,12 @@ function renderScene(){
       if (e[2] > eps) continue;
       const z = (proj[e[0]][2]+proj[e[1]][2])/2;
       const a = shade ? 0.3+0.6*depthT(z,fitR) : 0.9;
-      sctx.strokeStyle = rgba(colormap(e[2]/RENDER_MAX), a);
+      sctx.strokeStyle = rgba(colormap(e[2]/EMAX), a);
       sctx.beginPath();
       sctx.moveTo(scr[e[0]][0], scr[e[0]][1]);
       sctx.lineTo(scr[e[1]][0], scr[e[1]][1]);
       sctx.stroke();
     }
-  }
-  // Beyond the display-mesh cap the mesh is what exists up to RENDER_MAX -- dim it and
-  // say so, so "ε > render" never looks like a fully built complex while the label
-  // claims the exact full-simplex answer at ε = Dmax.
-  if (CONN && eps > RENDER_MAX + 1e-9 && CONN.max > CONN.cap + 1e-9){
-    sctx.globalAlpha = 0.55;
-    sctx.fillStyle = "#0b1020";
-    sctx.fillRect(0, 6, w, 26);
-    sctx.globalAlpha = 1;
-    sctx.fillStyle = "#e8ecf6";
-    sctx.font = "12px ui-monospace, monospace";
-    sctx.fillText("Oberfläche gerendert bis ε = " + RENDER_MAX.toFixed(3) +
-                  "  (2-Komplex darüber infeasibel) — β bleibt exakt", 10, 23);
   }
   if (showPoints){
     for (let i=0;i<P.length;i++){
@@ -2935,7 +2964,7 @@ function render(){
     ro.textContent = `layer ${DATA.layers[li]}  ·  t = ${t.toFixed(1)}/${N_L-1}`;
   } else {
     let extra = "";
-    if (CONN && eps > RENDER_MAX - 1e-9){
+    if (CONN && eps > CONN.cap - 1e-9){
       if (CONN.probe_min != null && eps >= CONN.probe_min - 1e-9)
         extra = "  ·  exakt via Homotopie-Reduktion (Kern-Komplex)";
       else
