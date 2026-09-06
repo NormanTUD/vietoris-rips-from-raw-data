@@ -219,12 +219,13 @@ _RENDER_MAX_BUDGET: int = 300_000   # separate display mesh: what you SEE is a r
 
 
 def _convex_hull_skin(X: np.ndarray, D: np.ndarray,
-                      C_render: FilteredComplex) -> FilteredComplex:
-    """Append the point cloud's CONVEX-HULL surface to a display complex so the very
-    top of the slider shows a closed, hole-free "everything connected" body -- the
-    faithful picture of the full simplex / contractible β reading. The affine hull of
-    a lower-dimensional cloud degenerates Qhull (hyperplane-parallel); that case is
-    caught and returns the dense mesh unchanged."""
+                      C_render: FilteredComplex, eps_birth: float) -> FilteredComplex:
+    """Append the point cloud's CONVEX-HULL surface to a display complex so that from
+    `eps_birth` (the dense-mesh cap) upward the slider shows a closed, hole-free
+    "everything connected" body -- the faithful picture of the full simplex /
+    contractible β reading, covering the dense Rips mesh's over-fill gaps. The affine
+    hull of a lower-dimensional cloud degenerates Qhull (hyperplane-parallel); that
+    case is caught and returns the dense mesh unchanged."""
     try:
         from scipy.spatial import ConvexHull, QhullError
         if D.shape[0] < 4 or X.shape[1] != 3:
@@ -233,7 +234,7 @@ def _convex_hull_skin(X: np.ndarray, D: np.ndarray,
     except (QhullError, ImportError, Exception):
         return C_render
     existing = set(C_render.simplexes)
-    dmax = float(D.max())
+    dmax = float(eps_birth)
     added_edges: list[tuple[int, ...]] = []
     added_faces: list[tuple[int, ...]] = []
     for tri in hull.simplices:
@@ -286,7 +287,7 @@ def _attach_render_complex(C: FilteredComplex, X: np.ndarray, D: np.ndarray,
                                  f"(≤{args.render_budget} simplices)"):
         C_render = build_rips(X, D, eps_dense, max_dim=2,
                               max_simplices=max(args.render_budget * 2, 10_000))
-    hull = _convex_hull_skin(X, D, C_render)
+    hull = _convex_hull_skin(X, D, C_render, eps_dense)
     C.params["render"] = hull
     C.params["render_dense"] = float(eps_dense)
     C.params["eps_render"] = float(eps_hi)   # the view now spans the whole slider
@@ -2943,19 +2944,22 @@ function renderSyst(){
 }
 
 function effectiveBeta(eps, row){
-  // Beyond the 2-complex cap the raw Rips higher-dim numbers are honestly null
+  // Beyond the 2-complex cap the raw Rips HIGHER-DIM numbers are honestly null
   // ("…"). If the cloud's geometry was RECOGNIZED as a known structure (torus /
   // sphere / circle), fill those nulls with its canonical Betti vector, clearly
   // badged as recognition (a model answer, never confused with a computation).
+  // β₀ is always exact (1-skeleton), so we leave it alone.
   if (!DATA.recognized || !(eps > HOM + 1e-9)) return {row: row, rec: false};
-  const hasAny = row.some(v => typeof v === "number" && Number.isFinite(v));
-  if (hasAny) return {row: row, rec: false};
   const rb = DATA.recognized.beta;
   const filled = row.slice();
-  for (let d = 0; d < filled.length; d++){
-    if (d < rb.length) filled[d] = rb[d]; else filled[d] = 0;
+  let anyFill = false;
+  for (let d = 1; d < filled.length; d++){
+    if ((filled[d] == null || Number.isNaN(filled[d])) && d < rb.length){
+      filled[d] = rb[d];
+      anyFill = true;
+    }
   }
-  return {row: filled, rec: true};
+  return {row: filled, rec: anyFill};
 }
 
 function updateCards(){
