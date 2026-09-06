@@ -2566,13 +2566,13 @@ function renderScene(){
   sctx.clearRect(0,0,w,h);
   const proj = P.map(project);
   const scr = proj.map(q => toScreen(q, w, h));
+  // Past the dense-mesh cap (render_dense) the inner Rips triangles/edges create
+  // spurious "connections" through the donut hole etc -- hide them and leave only
+  // the convex-hull skin, which is a closed outer surface with no over-fill artifacts.
+  const denseCap = (CONN && CONN.render_dense) ? CONN.render_dense : HOM;
+  const skipDense = eps > denseCap + 1e-9;
 
   if (showFaces && F.length){
-    // Past the dense-mesh cap (render_dense) the inner Rips triangles create spurious
-    // "connections" through the donut hole etc -- hide them and leave only the
-    // convex-hull skin, which is a closed outer surface with no over-fill artifacts.
-    const denseCap = (CONN && CONN.render_dense) ? CONN.render_dense : HOM;
-    const skipDense = eps > denseCap + 1e-9;
     // Painter's (back-to-front) order depends only on the view, not eps. Recompute
     // it only when the view rotates; the rounded key throttles re-sorts during a
     // drag. (Re-sorting every face on every frame is what made this ultra-slow.)
@@ -2652,6 +2652,7 @@ function renderScene(){
     sctx.lineWidth = 1.1;
     for (const e of E){
       if (e[2] > eps) continue;
+      if (skipDense && e[2] < denseCap - 1e-6) continue;
       const z = (proj[e[0]][2]+proj[e[1]][2])/2;
       const a = shade ? 0.3+0.6*depthT(z,fitR) : 0.9;
       sctx.strokeStyle = rgba(colormap(e[2]/EMAX), a);
@@ -3316,7 +3317,7 @@ def main() -> int:
                    help="max simplices of the SEPARATE display mesh (max_dim=2) built up "
                         "to the largest epsilon that keeps the 3D view under this budget; "
                         "beta numbers never come from this mesh (default %(default)s)")
-    p.add_argument("--render-grid", type=int, default=100,
+    p.add_argument("--render-grid", type=int, default=30,
                    help="visual decimation: snap the display mesh's vertices to a 3D "
                         "voxel grid with N cells along the longest axis (default %(default)s). "
                         "Larger = finer mesh (slower); smaller = coarser (faster).")
