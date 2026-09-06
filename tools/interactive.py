@@ -291,7 +291,7 @@ def _beyond_cap(c: int, maxdim: int, cap: float,
     msg = f"{head}; {infeas}"
     if dmax is not None:
         msg += (f" Garantiert: bei ε={dmax:.2f} (max Abstand) ist der Komplex der volle "
-                f"Simplex → β=[1,{ ', '.join(['0'] * maxdim)}].")
+                f"Simplex → β=[1,{','.join(['0'] * maxdim)}].")
     if maxdim >= 1:
         dims = ([f"{c} Komponente(n) — 1-Skelett, exakt (jenseits der 2-Komplex-Grenze "
                  f"ε={cap:.3f})" if c != 1 else f"1 Komponente — zusammenhängend "
