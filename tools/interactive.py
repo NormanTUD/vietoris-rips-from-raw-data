@@ -1511,7 +1511,8 @@ def build_payload(args: argparse.Namespace) -> dict[str, object]:
         if iv.dim > maxdim:
             continue
         death = eps_max if not np.isfinite(iv.death) else float(iv.death)
-        intervals.append([int(iv.dim), round(float(iv.birth), 5), round(death, 5)])
+        ess = 0 if np.isfinite(iv.death) else 1
+        intervals.append([int(iv.dim), round(float(iv.birth), 5), round(death, 5), ess])
 
     title = args.title or C.kind
     extra = ""
@@ -2032,6 +2033,10 @@ TEMPLATE = r"""<!DOCTYPE html>
         <canvas id="bfun" height="150"></canvas>
         <div id="syst" style="margin-top:6px;"></div>
       </div>
+      <div class="panel" id="p-bc">
+        <h3>Persistence barcode — intervals over the filtration <span id="bcnote"></span></h3>
+        <canvas id="bc" height="210"></canvas>
+      </div>
       <div class="panel" id="p-diag">
         <h3>Persistence diagram (birth → death)</h3>
         <canvas id="diag" height="230"></canvas>
@@ -2104,8 +2109,13 @@ let faceOrder = null, faceOrderKey = "";
 
 const scene = document.getElementById("scene"), sctx = scene.getContext("2d");
 const bfun  = document.getElementById("bfun"),  bctx = bfun.getContext("2d");
+const bcEl  = document.getElementById("bc"),    bctx2 = bcEl.getContext("2d");
 const diag  = document.getElementById("diag"),  dctx = diag.getContext("2d");
 const conv  = document.getElementById("conv"),  cctx = conv.getContext("2d");
+const bcnote = document.getElementById("bcnote");
+bcnote.textContent = EMAX > HOM + 1e-9
+  ? `(nur ε ≤ ${HOM.toFixed(3)} — die 2-Komplex-Grenze; ε bis ${EMAX.toFixed(2)} nur β₀ exakt)`
+  : "(ε = birth → death)";
 
 document.getElementById("title").textContent = DATA.title;
 document.getElementById("sub").textContent = DATA.sub;
@@ -2171,7 +2181,7 @@ for (let d = 0; d < N_D; d++){
   const lab = document.createElement("label");
   lab.title = "Struktur nur in dieser Dimension anzeigen" + (d === 0 ? " (aus \u2014 die anderen Dimensionen werden maskiert)" : "");
   lab.innerHTML = `<input type="checkbox" checked><span style="color:${DIM_COLOR[d] || "#ccc"}">${hsub(d)}</span>`;
-  lab.querySelector("input").addEventListener("change", ev => { dimsOn[d] = ev.target.checked; render(); });
+  lab.querySelector("input").addEventListener("change", ev => { dimsOn[d] = ev.target.checked; if (MODE === "filtration") rebuildBarcode(); render(); });
   dimsRow.appendChild(lab);
 }
 
@@ -2183,9 +2193,10 @@ function fit(c){
   return dpr;
 }
 function fitAll(){
-  fit(scene); fit(bfun); fit(diag); fit(conv);
-  if (MODE !== "filtration"){ document.getElementById("p-diag").style.display="none"; }
+  fit(scene); fit(bfun); fit(bcEl); fit(diag); fit(conv);
+  if (MODE !== "filtration"){ document.getElementById("p-diag").style.display="none"; document.getElementById("p-bc").style.display="none"; }
   if (MODE !== "trajectory"){ document.getElementById("p-conv").style.display="none"; document.getElementById("p-legend").style.display="none"; }
+  if (MODE === "filtration") rebuildBarcode();
 }
 window.addEventListener("resize", () => { fitAll(); render(); });
 
@@ -2401,6 +2412,66 @@ function renderDiagram(){
   dctx.fillText("birth →", m, h-4);
   dctx.save(); dctx.translate(9, m+ph/2); dctx.rotate(-Math.PI/2); dctx.fillText("death ↑", 0, 0); dctx.restore();
   dctx.restore();
+}
+
+// ---- persistence barcode -------------------------------------------------
+// Rasterized ONCE into an offscreen bitmap (dense clouds = hundreds of thousands
+// of bars), then composited + overlaid live. Bars are stacked row by row per
+// dimension (longest first), so a strip full of 1px marks IS the honest picture
+// for over-filling Rips clouds: everything born, dies almost immediately.
+let bcBit = null;
+function rebuildBarcode(){
+  const dpr = window.devicePixelRatio || 1;
+  const w = bcEl.width/dpr, h = bcEl.height/dpr;
+  const off = document.createElement("canvas");
+  off.width = bcEl.width; off.height = bcEl.height;
+  const o = off.getContext("2d"); o.scale(dpr, dpr);
+  o.clearRect(0, 0, w, h);
+  const byDim = {};
+  for (const iv of IV){
+    const d = iv[0];
+    if (!byDim[d]) byDim[d] = [];
+    byDim[d].push(iv);
+  }
+  const dimList = Object.keys(byDim).map(Number).sort((a,b)=>a-b).filter(d => dimsOn[d]);
+  const m = 26, pw = w-m-8, ph = h-8-10;
+  const X = v => m + (v/HOM)*pw;
+  const nB = Math.max(1, dimList.length);
+  const bandH = ph/nB;
+  for (let di=0; di<dimList.length; di++){
+    const d = dimList[di], arr = byDim[d];
+    arr.sort((a,b) => (b[2]-b[1]) - (a[2]-a[1]));
+    const y0 = 8 + di*bandH + 2;
+    o.fillStyle = DIM_COLOR[d]; o.font = "10px system-ui";
+    o.fillText("H" + (SUBD[d] || d), 4, Math.min(h-2, y0 + 9));
+    o.globalAlpha = 0.85;
+    const rows = Math.max(1, Math.floor(bandH - 4));
+    for (let i=0; i<arr.length && i/rows < 400000; i++){
+      const x1 = X(arr[i][1]);
+      const x2 = X(arr[i][2] < HOM ? arr[i][2] : HOM);
+      if (x2 < m) continue;
+      o.fillRect(Math.max(m, x1), y0 + (i % rows), Math.max(1, x2 - x1), 1);
+    }
+    o.globalAlpha = 1;
+  }
+  bcBit = off;
+}
+
+function renderBarcode(){
+  const dpr = window.devicePixelRatio || 1, w = bcEl.width/dpr, h = bcEl.height/dpr;
+  bctx2.save(); bctx2.scale(dpr, dpr);
+  bctx2.clearRect(0,0,w,h);
+  if (bcBit) bctx2.drawImage(bcBit, 0, 0, w, h);
+  const m = 26, pw = w-m-8, ph = h-8-10;
+  const X = v => m + (v/HOM)*pw;
+  bctx2.strokeStyle = "#3a4553"; bctx2.strokeRect(m, 8, pw, ph);
+  const cx = Math.min(w-8, Math.max(m, X(eps)));
+  bctx2.strokeStyle = "#e6edf3"; bctx2.globalAlpha = 0.65;
+  bctx2.beginPath(); bctx2.moveTo(cx,8); bctx2.lineTo(cx,8+ph); bctx2.stroke();
+  bctx2.globalAlpha = 1;
+  bctx2.fillStyle="#8b98a9"; bctx2.font="10px system-ui";
+  bctx2.fillText("ε = birth → death", m, h-1);
+  bctx2.restore();
 }
 
 // ---- betti function ------------------------------------------------------
@@ -2711,7 +2782,7 @@ function updateCards(){
 function render(){
   computeFit();
   if (MODE === "trajectory"){ renderTrajScene(); renderConv(); renderBfunTraj(); }
-  else { renderScene(); renderDiagram(); renderBfun(); }
+  else { renderScene(); renderDiagram(); renderBarcode(); renderBfun(); }
   updateCards();
   const ro = document.getElementById("eps-readout");
   if (MODE === "trajectory"){
