@@ -255,6 +255,60 @@ def _convex_hull_skin(X: np.ndarray, D: np.ndarray,
                            np.asarray(dim, dtype=np.int64), C_render.kind, params)
 
 
+def _decimate_for_display(pts: np.ndarray, C: FilteredComplex,
+                          target_cells: int) -> FilteredComplex:
+    """Snap the DISPLAY mesh's vertices to a 3D voxel grid so the SAME topological
+    shape is drawn with FAR fewer primitives (the slider stays responsive on a
+    dense cloud like a 3072-pt bagel where the dense Rips complex has ~250k
+    triangles). The HOMOLOGY complex is unaffected: β numbers come from the
+    unsnapped cloud; only the visual decimation happens here. Degenerate faces
+    (whose 3 vertices collapsed to <3 unique cells) are dropped; duplicate faces
+    are merged. Keep going until we hit <3 unique vertices -- then the mesh is
+    useless and we return the unsnapped complex as a safety net."""
+    if target_cells <= 8 or len(C.simplexes) == 0:
+        return C
+    pts = np.asarray(pts, dtype=np.float64)
+    if pts.ndim != 2 or pts.shape[1] < 2 or len(pts) < 4:
+        return C
+    mn = pts.min(axis=0)
+    rng = float((pts.max(axis=0) - mn).max())
+    if rng <= 1e-12:
+        return C
+    cell = rng / float(target_cells)
+    cells = np.floor((pts - mn) / max(cell, 1e-12)).astype(np.int64)
+    # hash (i,j,k) to a single int per vertex
+    keys = np.zeros(len(pts), dtype=np.int64)
+    for d in range(cells.shape[1]):
+        keys = keys * 1_000_003 + cells[:, d]
+    # representative index = first vertex in each voxel
+    rep = np.empty(len(pts), dtype=np.int64)
+    seen_k: dict[int, int] = {}
+    for i, k in enumerate(keys.tolist()):
+        r = seen_k.get(k)
+        if r is None:
+            seen_k[k] = i; r = i
+        rep[i] = r
+    new_simp: list[tuple[int, ...]] = []
+    new_vals: list[float] = []
+    new_dims: list[int] = []
+    seen_simp: set[tuple[int, ...]] = set()
+    for s, v, d in zip(C.simplexes, C.values, C.dims):
+        ns = tuple(sorted({int(rep[i]) for i in s}))
+        if len(ns) != len(s):
+            continue          # degenerate (vertices collapsed onto one cell)
+        if ns in seen_simp:
+            continue
+        seen_simp.add(ns)
+        new_simp.append(ns); new_vals.append(float(v)); new_dims.append(int(d))
+    if len(new_simp) == 0:
+        return C
+    n_unique = len(set(new_simp[0]) | set().union(*(set(s) for s in new_simp[:50])))
+    if n_unique < 3:
+        return C
+    return FilteredComplex(new_simp, np.asarray(new_vals, dtype=float),
+                           np.asarray(new_dims, dtype=np.int64), C.kind, dict(C.params))
+
+
 def _attach_render_complex(C: FilteredComplex, X: np.ndarray, D: np.ndarray,
                            eps_max: float, eps_hi: float,
                            args: argparse.Namespace) -> FilteredComplex:
@@ -264,12 +318,14 @@ def _attach_render_complex(C: FilteredComplex, X: np.ndarray, D: np.ndarray,
     WHOLE slider range `eps_hi`:
       * an ordinary Rips 2-complex revealed up to the densest feasible ε (per
         --render-budget), and
-      * the cloud's CONVEX-HULL surface appended with birth = Dmax, so dragging to
-        the top ε actually renders a closed, hole-free "everything connected" body
-        (coherent with the full-simplex/contractible β reading). The β numbers never
-        come from this display mesh. Stored on C.params as 'render'/'eps_render';
-        the returned complex is the display complex (falls back to C when not
-        worthwhile)."""
+      * the cloud's CONVEX-HULL surface appended with birth = render_dense so it
+        covers the dense mesh's outer gaps from the structure mark upward (the
+        faithful picture of the full simplex / contractible β reading);
+      * the whole thing VERTEX-DECIMATED to a voxel grid (--render-grid) so the
+        same shape is drawn with far fewer primitives -- the slider stays snappy
+        on dense clouds. The β numbers never come from this display mesh. Stored
+        on C.params as 'render'/'eps_render'; the returned complex is the display
+        complex (falls back to C when not worthwhile)."""
     if C.kind != "rips":
         C.params["render"] = C
         C.params["eps_render"] = float(eps_max)
@@ -288,10 +344,15 @@ def _attach_render_complex(C: FilteredComplex, X: np.ndarray, D: np.ndarray,
         C_render = build_rips(X, D, eps_dense, max_dim=2,
                               max_simplices=max(args.render_budget * 2, 10_000))
     hull = _convex_hull_skin(X, D, C_render, eps_dense)
-    C.params["render"] = hull
+    # Visual decimation: cluster vertices to a voxel grid so the SAME shape renders
+    # with far fewer primitives (slider stays responsive on dense clouds). β stays
+    # exact (this only affects the visual mesh).
+    pts3d = X if X.shape[1] == 3 else _to3d(X, "rips")[0]
+    decim = _decimate_for_display(pts3d, hull, args.render_grid)
+    C.params["render"] = decim
     C.params["render_dense"] = float(eps_dense)
     C.params["eps_render"] = float(eps_hi)   # the view now spans the whole slider
-    return hull
+    return decim
 
 
 def _max_feasible_eps(X: np.ndarray, D: np.ndarray, eps_hi: float,
@@ -3248,6 +3309,10 @@ def main() -> int:
                    help="max simplices of the SEPARATE display mesh (max_dim=2) built up "
                         "to the largest epsilon that keeps the 3D view under this budget; "
                         "beta numbers never come from this mesh (default %(default)s)")
+    p.add_argument("--render-grid", type=int, default=100,
+                   help="visual decimation: snap the display mesh's vertices to a 3D "
+                        "voxel grid with N cells along the longest axis (default %(default)s). "
+                        "Larger = finer mesh (slower); smaller = coarser (faster).")
     p.add_argument("--probe-max-core", type=int, default=_PROBE_MAX_CORE,
                    help="max vertices of the reduced core for an exact far-tail homology "
                         "probe past the 2-complex cap (default %(default)s)")
