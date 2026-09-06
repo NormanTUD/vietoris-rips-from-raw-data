@@ -2568,6 +2568,11 @@ function renderScene(){
   const scr = proj.map(q => toScreen(q, w, h));
 
   if (showFaces && F.length){
+    // Past the dense-mesh cap (render_dense) the inner Rips triangles create spurious
+    // "connections" through the donut hole etc -- hide them and leave only the
+    // convex-hull skin, which is a closed outer surface with no over-fill artifacts.
+    const denseCap = (CONN && CONN.render_dense) ? CONN.render_dense : HOM;
+    const skipDense = eps > denseCap + 1e-9;
     // Painter's (back-to-front) order depends only on the view, not eps. Recompute
     // it only when the view rotates; the rounded key throttles re-sorts during a
     // drag. (Re-sorting every face on every frame is what made this ultra-slow.)
