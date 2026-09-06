@@ -42,7 +42,9 @@ Examples:
 import argparse
 import json
 import math
+import os
 import sys
+import tempfile
 import time
 import traceback
 from collections.abc import Sequence
@@ -60,6 +62,31 @@ from rich.console import Console
 from rich.progress import Progress
 
 console = Console()
+
+_MMAP_FILES: list[str] = []   # temp .npy memmaps to delete when the run finishes
+
+
+def _dist_matrix(X: np.ndarray, metric: str, memory: str) -> np.ndarray:
+    """Distance matrix for a point cloud, honoring --memory.
+
+    `ram`  -> plain in-memory numpy array (use on an HPC node with plenty of RAM).
+    `disk` -> spill to a float32 np.memmap in a temp directory (cheap locally /
+              when RAM is tight): only ON-DEMAND rows are paged in, the full
+              12288² matrix never lives in RAM at once.
+    `auto` -> disk when the in-RAM matrix would exceed ~512 MiB, else ram.
+    """
+    need = int(X.shape[0]) * int(X.shape[0]) * 8
+    if memory == "disk" or (memory == "auto" and need > 512 * 2**20):
+        D = np.asarray(pairwise_distances(X, metric), dtype=np.float32)
+        fd, path = tempfile.mkstemp(prefix="vr_rips_", suffix=".npy")
+        os.close(fd)
+        mm = np.memmap(path, dtype=np.float32, mode="w+", shape=D.shape)
+        mm[:] = D
+        mm.flush()
+        _MMAP_FILES.append(path)
+        return mm
+    return np.asarray(pairwise_distances(X, metric), dtype=np.float64)
+
 
 import _rich_ui
 from vrtda import PointSet, pairwise_distances
@@ -188,6 +215,39 @@ def _build_rips_safe(X: np.ndarray, D: np.ndarray, eps_max: float, max_dim: int,
 # pure-Python homology and the browser both choke.
 _FEASIBLE_MAX_BUDGET: int = 160_000
 _FEASIBLE_RES: float = 1e-3
+_RENDER_MAX_BUDGET: int = 300_000   # separate display mesh: what you SEE is a richer complex
+
+
+def _attach_render_complex(C: FilteredComplex, X: np.ndarray, D: np.ndarray,
+                           eps_max: float, eps_hi: float,
+                           args: argparse.Namespace) -> FilteredComplex:
+    """Decouple WHAT WE DRAW from WHAT WE MEASURE. The homology cap `eps_max` (≈160k
+    simplices) is far below the scale where a dense bagel's surface fills in, so the
+    3D view would always look holey. Build a SEPARATE display mesh up to the largest ε
+    whose 2-complex stays under --render-budget simplices (max_dim=2 only -- the β
+    numbers never come from this complex). Stored on C.params as 'render'/'eps_render';
+    the returned complex is the display complex (falls back to C when not worth it)."""
+    if C.kind != "rips":
+        C.params["render"] = C
+        C.params["eps_render"] = float(eps_max)
+        return C
+    eps_hi = float(eps_hi)
+    if eps_hi <= eps_max + 1e-9:
+        C.params["render"] = C
+        C.params["eps_render"] = float(eps_max)
+        return C
+    eps_render = _max_feasible_eps(X, D, eps_hi, budget=args.render_budget,
+                                   res=args.feasible_res)
+    if eps_render <= eps_max + 1e-9:
+        C.params["render"] = C
+        C.params["eps_render"] = float(eps_max)
+        return C
+    with _rich_ui.timed(console, f"Display mesh ε={eps_render:.3f} (≤{args.render_budget} simplices)"):
+        C_render = build_rips(X, D, eps_render, max_dim=2,
+                              max_simplices=args.render_budget * 2)
+    C.params["render"] = C_render
+    C.params["eps_render"] = float(eps_render)
+    return C_render
 
 
 def _max_feasible_eps(X: np.ndarray, D: np.ndarray, eps_hi: float,
@@ -226,17 +286,19 @@ def _max_feasible_eps(X: np.ndarray, D: np.ndarray, eps_hi: float,
 def _components_curve(D: np.ndarray, eps_grid: np.ndarray) -> list[int]:
     """Connected components of the 1-skeleton at each ε (union-find over the edges that
     have appeared). EXACT and cheap: 'when does the cloud become one structure' is a
-    graph question, so it can be answered past the feasible-2-complex cap -- the graph
-    is all that matters for β₀, never the triangles that make the full complex blow up."""
+    graph question, so it can be answered past the feasible-2-complex cap -- the graph is
+    all that matters for β₀, never the triangles that make the full complex blow up.
+
+    STEPWISE on purpose: the grid is walked in ascending ε order and at every level only
+    the NEW edges of the current (prev, ε] slice are extracted (per-row numpy masks),
+    so huge clouds never materialize the full n² edge list in memory at once -- each
+    level's slice is transient and the union-find is seeded from the previous level.
+    As soon as the cloud is one component every higher level short-circuits to 1.
+    Works directly on a float32 np.memmap distance matrix (pages rows on demand)."""
     n = int(D.shape[0])
+    out: list[int] = []
     if n <= 1:
         return [1] * len(eps_grid)
-    iu = np.triu_indices(n, 1)
-    w = np.asarray(D[iu])
-    order = np.argsort(w)
-    edge_a = iu[0][order].tolist()
-    edge_b = iu[1][order].tolist()
-    edge_w = w[order].tolist()
     parent = list(range(n))
     rank = [0] * n
     comp = n
@@ -247,42 +309,65 @@ def _components_curve(D: np.ndarray, eps_grid: np.ndarray) -> list[int]:
             a = parent[a]
         return a
 
-    def union(a: int, b: int) -> bool:
+    def union(a: int, b: int) -> None:
         nonlocal comp
         ra, rb = find(a), find(b)
         if ra == rb:
-            return False
+            return
         if rank[ra] < rank[rb]:
             ra, rb = rb, ra
         parent[rb] = ra
         if rank[ra] == rank[rb]:
             rank[ra] += 1
         comp -= 1
-        return True
 
-    out: list[int] = []
-    ei = 0
-    m = len(edge_a)
+    prev = 0.0
     for e in eps_grid:
         lim = float(e)
-        while ei < m and edge_w[ei] <= lim:
-            union(edge_a[ei], edge_b[ei])
-            ei += 1
+        for v in range(n - 1):                    # upper triangle: row v, cols v+1..
+            row = D[v, v + 1:]                    # memmap-friendly contiguous row slice
+            idx = np.flatnonzero(np.logical_and(row > prev, row <= lim))
+            if idx.size:
+                base = v + 1
+                for u in idx.tolist():
+                    union(v, base + int(u))
+        prev = lim
         out.append(comp)
-    return out
+        if comp <= 1:
+            out.extend([1] * (len(eps_grid) - len(out)))
+            break
+    return out[:len(eps_grid)]
 
 
 def _beyond_cap(c: int, maxdim: int, cap: float,
-                dmax: float | None = None, why: str = "") -> tuple[list[int], str, list[str], dict[int, str], str]:
+                dmax: float | None = None, why: str = "",
+                at_dmax: bool = False) -> tuple[list[int], str, list[str], dict[int, str], str]:
     """Recognition rows for ε ABOVE the feasible 2-complex cap: β₀ is exact (1-skeleton),
     H₁..H_top are UNKNOWN (honestly -- the complex that would measure them is infeasible,
     so a number would be a lie). Returns (struct_row, topo_message, dim_summaries,
     masked_messages, dyn_message). `dmax` is the max pairwise distance (where the complex
     is guaranteed to be the full simplex, β=[1,0,..]); `why` is the concrete infeasibility
-    reason (e.g. core/Komplex-Größe)."""
+    reason (e.g. core/Komplex-Größe). With `at_dmax=True` the ALSO exact [1,0,..] row is
+    returned (ε = D_max => the complete simplex, so β=[1,0,..] is THE exact answer)."""
     row = [int(c)] + [0] * int(maxdim)
     head = (f"β₀ = {c} Komponente(n) — exakt aus dem 1-Skelett"
             if c != 1 else "β₀ = 1 Komponente — die Wolke ist zusammenhängend (1-Skelett)")
+    if at_dmax:
+        row = [1] + [0] * int(maxdim)
+        msg = (f"β = [1,{','.join(['0'] * maxdim)}] — EXAKT: bei ε={dmax:.2f} (max Abstand) "
+               f"ist der Komplex der volle {int(maxdim) + 1}-Simplex über allen Punkten, "
+               f"also zusammenziehbar."
+               if dmax is not None else
+               f"β = [1,{','.join(['0'] * maxdim)}] — voller Simplex (alle Punkte in einer "
+               f"Nachbarschaft), exakt zusammenziehbar.")
+        dims = ([f"1 Komponente — voller Simplex bei ε={dmax:.2f}, exakt" if dmax is not None
+                 else "1 Komponente — voller Simplex, exakt"]
+                + [f"H_{d}: 0 — voller Simplex (exakt)" for d in range(1, maxdim + 1)])
+        masked = {m: msg for m in range(1, (1 << (maxdim + 1)) - 1 + 1)}
+        dyn_msg = (f"keine Dynamik-Aussage jenseits der 2-Komplex-Grenze ε={cap:.3f} — "
+                   f"am Range-Ende ε={dmax:.2f} ist der Komplex der volle Simplex, "
+                   f"β=[1,0,0], exakt")
+        return row, msg, dims, masked, dyn_msg
     if why:
         infeas = f"H₁…H_{maxdim} sind jenseits ε={cap:.3f} nicht exakt bestimmbar ({why})"
     else:
@@ -1132,7 +1217,7 @@ def build_source(args: argparse.Namespace) -> tuple[FilteredComplex, np.ndarray,
                 return C, pts, "exact T^2 (fitted to points)", target, rd
 
         # (2) Arbitrary point cloud via Rips.
-        D = pairwise_distances(X, args.metric)
+        D = _dist_matrix(X, args.metric, args.memory)
         max_dim = max(3, args.max_dim)
         # The slider spans the FULL Vietoris-Rips range: eps 0 -> max pairwise distance
         # (Dmax), or 0 -> --eps-max if the user gives an explicit (smaller) ceiling.
@@ -1151,11 +1236,13 @@ def build_source(args: argparse.Namespace) -> tuple[FilteredComplex, np.ndarray,
                           f"the 1-skeleton. For a clean torus use `--shape donut` (or drop "
                           f"--no-exact-torus if this is a torus grid).[/yellow]")
         C = _build_rips_safe(X, D, eps_max, max_dim)
-        n_faces = sum(1 for s in C.simplexes if len(s) == 3)
+        C_show = _attach_render_complex(C, X, D, eps_max, eps_hi, args)
+        n_faces = sum(1 for s in C_show.simplexes if len(s) == 3)
         if _is_overfilling(X.shape[0], n_faces):
             _rich_ui.overfill_note(console, X.shape[0], n_faces)
         C.params["D"] = D
         C.params["rng_hi"] = float(eps_hi)
+        C.params["dmax"] = float(Dmax)
         pts, proj = _to3d(X, "rips")
         _attach_raw(C, X)
         return C, pts, proj, None, min(max_dim - 1, 3)
@@ -1183,7 +1270,7 @@ def build_source(args: argparse.Namespace) -> tuple[FilteredComplex, np.ndarray,
             print(f"[donut-rips] full-range Rips homology is slow; capping grid "
                   f"{args.nper}x{args.nper} -> {nper}x{nper}", file=sys.stderr)
         X = G.donut_grid(nper, nper)
-        D = pairwise_distances(X, args.metric)
+        D = _dist_matrix(X, args.metric, args.memory)
         eps_max = float(D.max())  # max pairwise distance -> slider 0 .. Dmax
         max_dim = 2  # edges + triangles (the bagel surface); skip slow tetrahedra
         with _rich_ui.timed(Console(), "Building Rips bagel (full range 0 -> max distance)"):
@@ -1209,7 +1296,7 @@ def build_source(args: argparse.Namespace) -> tuple[FilteredComplex, np.ndarray,
     else:
         raise SystemExit(f"unknown shape {args.shape!r}")
 
-    D = pairwise_distances(X, args.metric)
+    D = _dist_matrix(X, args.metric, args.memory)
     # Slider must span the FULL feasible Vietoris-Rips range (0 .. max pairwise
     # distance), exactly as the --points path does -- a connectivity-scaled ceiling is
     # too small to ever close a space. Capped at the largest FEASIBLE epsilon so a
@@ -1234,8 +1321,10 @@ def build_source(args: argparse.Namespace) -> tuple[FilteredComplex, np.ndarray,
     # exact cell complex (see tests/test_betti_shapes.py).
     max_dim = min(max(k + 1, 2, args.max_dim), 3)
     C = _build_rips_safe(X, D, eps_max, max_dim)
+    C_show = _attach_render_complex(C, X, D, eps_max, eps_hi, args)
     C.params["D"] = D
     C.params["rng_hi"] = float(eps_hi)
+    C.params["dmax"] = float(D.max())
     _attach_raw(C, X)
     if args.shape == "product" and k == 2:
         # The R^4 product 2-torus is 4-fold symmetric, so a PCA-3D view collapses to a
@@ -1426,16 +1515,18 @@ def build_payload(args: argparse.Namespace) -> dict[str, object]:
         grid_ui = np.linspace(0.0, eps_ui, n_grid)
         Dc = C.params.get("D")
         if Dc is None:
-            Dc = pairwise_distances(raw_cloud, args.metric)
-        Dc_full = np.asarray(Dc, dtype=np.float64)
+            Dc = _dist_matrix(raw_cloud, args.metric, args.memory)
+        Dc_full = np.asarray(Dc)          # memmap-safe: no dtype re-cast on a big matrix
+        _Dmax = float(C.params.get("dmax", Dc_full.max()))
         comps = _components_curve(Dc_full, grid_ui)
         n_ui = len(grid_ui)
         cap_idx = max(0, int(np.searchsorted(grid_ui, eps_cap, side="right")) - 1)
         merge_idx = next((i for i, c in enumerate(comps) if c <= 1), None)
         conn = {"merge": round(float(grid_ui[merge_idx]), 5) if merge_idx is not None else None,
                 "cap": round(float(eps_cap), 5),
+                "render": round(float(C.params.get("eps_render", eps_cap)), 5),
                 "max": round(float(eps_ui), 5)}
-        if merge_idx is None and float(Dc_full.max()) > eps_ui + 1e-9:
+        if merge_idx is None and _Dmax > eps_ui + 1e-9:
             # the cloud merges beyond the requested ceiling -- find where, so we can tell
             # the user honestly ("your points only connect at ε≈…") instead of implying the
             # data never connects.
@@ -1514,10 +1605,15 @@ def build_payload(args: argparse.Namespace) -> dict[str, object]:
                 table_use[i][0] = round(float(comps[i]), 5)
             else:
                 srow, tmsg, dss, mmsk, dmsg = _beyond_cap(
-                    c, maxdim, eps_cap, dmax=_Dmax, why=probe_why.get(i, ""))
+                    c, maxdim, eps_cap, dmax=_Dmax, why=probe_why.get(i, ""),
+                    at_dmax=(i == n_ui - 1))
                 sr.append(srow); tm.append(tmsg); tc.append([])
                 dm.append(dmsg); dc.append([]); dt.append("")
                 dsm.append(dss); mm.append(mmsk)
+                if i == n_ui - 1:
+                    # ε = Dmax: the flag complex is the FULL SIMPLEX, so β=[1,0,..] is
+                    # exact -- the cards must read it, not leave H₁/H₂ as "unknown".
+                    table_use[i] = [round(float(v), 6) for v in srow]
                 table_use[i][0] = round(float(comps[i]), 5)
         if probe_at:
             conn["probe_min"] = round(float(grid_ui[min(probe_at)]), 5)
@@ -1528,10 +1624,11 @@ def build_payload(args: argparse.Namespace) -> dict[str, object]:
         grid_use = grid_ui
 
     n = len(pts)
-    edges = [[int(a), int(b), round(float(C.values[C.index_of((int(a), int(b)))]), 5)]
-             for (a, b) in (s for s in C.simplexes if len(s) == 2)]
-    faces = [[int(a), int(b), int(c), round(float(C.values[C.index_of((int(a), int(b), int(c)))]), 5)]
-             for (a, b, c) in (s for s in C.simplexes if len(s) == 3)]
+    C_show = C.params.get("render", C)
+    edges = [[int(a), int(b), round(float(C_show.values[C_show.index_of((int(a), int(b)))]), 5)]
+             for (a, b) in (s for s in C_show.simplexes if len(s) == 2)]
+    faces = [[int(a), int(b), int(c), round(float(C_show.values[C_show.index_of((int(a), int(b), int(c)))]), 5)]
+             for (a, b, c) in (s for s in C_show.simplexes if len(s) == 3)]
     intervals = []
     for iv in bc.intervals:
         if iv.dim > maxdim:
@@ -2108,6 +2205,10 @@ const EMAX = (DATA.eps_ui || HOM);
 const MD = DATA.maxdim || 0;
 const P = DATA.points || [], E = DATA.edges || [], F = DATA.faces || [], IV = DATA.intervals || [];
 const CONN = DATA.conn || null;
+// RENDER_MAX = the largest ε the 3D view actually draws to (the server's display mesh
+// budget, shipped as conn.render). β stays exact only to HOM (conn.cap); between HOM
+// and RENDER_MAX the surface fills in visually while the numbers honestly go H₀-only.
+const RENDER_MAX = (CONN && CONN.render) ? CONN.render : Math.min(EMAX, HOM);
 const GRID = (DATA.betti && DATA.betti.grid) || [0,1];
 const TABLE = (DATA.betti && DATA.betti.table) || [[0]];
 
@@ -2307,19 +2408,22 @@ function renderScene(){
       faceOrderKey = vkey;
     }
     const alpha = shade ? 0.6 : 0.16;
+    // Beyond the 2-complex cap only the cap-limited subcomplex exists -- dim it.
+    const capDim = (CONN && eps > RENDER_MAX + 1e-9 && CONN.max > CONN.cap + 1e-9);
+    const alphaUse = capDim ? alpha * 0.35 : alpha;
     if (F.length <= 2000){
       // small mesh: one path per face (keeps the crisp per-face wireframe)
       sctx.lineWidth = 0.6;
       for (const i of faceOrder){
         const f = F[i]; if (f[3] > eps) continue;
-        const base = colormap(f[3]/HOM);
+        const base = colormap(f[3]/RENDER_MAX);
         const col = shade ? shadeColor(proj[f[0]],proj[f[1]],proj[f[2]],base,fitR) : base;
         sctx.beginPath();
         sctx.moveTo(scr[f[0]][0], scr[f[0]][1]);
         sctx.lineTo(scr[f[1]][0], scr[f[1]][1]);
         sctx.lineTo(scr[f[2]][0], scr[f[2]][1]);
         sctx.closePath();
-        sctx.fillStyle = rgba(col, alpha);
+        sctx.fillStyle = rgba(col, alphaUse);
         sctx.fill();
         if (shade){ sctx.strokeStyle = rgba(col, 0.85); sctx.stroke(); }
       }
@@ -2329,7 +2433,7 @@ function renderScene(){
       const buckets = new Map();
       for (const i of faceOrder){
         const f = F[i]; if (f[3] > eps) continue;
-        const base = colormap(f[3]/HOM);
+        const base = colormap(f[3]/RENDER_MAX);
         const col = shade ? shadeColor(proj[f[0]],proj[f[1]],proj[f[2]],base,fitR) : base;
         const key = (((col[0]|0)>>5)&7)*64 + (((col[1]|0)>>5)&7)*8 + (((col[2]|0)>>5)&7);
         let g = buckets.get(key);
@@ -2337,7 +2441,7 @@ function renderScene(){
         g.faces.push(f);
       }
       for (const g of buckets.values()){
-        sctx.fillStyle = rgba(g.col, alpha);
+        sctx.fillStyle = rgba(g.col, alphaUse);
         sctx.beginPath();
         for (const f of g.faces){
           sctx.moveTo(scr[f[0]][0], scr[f[0]][1]);
@@ -2355,12 +2459,25 @@ function renderScene(){
       if (e[2] > eps) continue;
       const z = (proj[e[0]][2]+proj[e[1]][2])/2;
       const a = shade ? 0.3+0.6*depthT(z,fitR) : 0.9;
-      sctx.strokeStyle = rgba(colormap(e[2]/HOM), a);
+      sctx.strokeStyle = rgba(colormap(e[2]/RENDER_MAX), a);
       sctx.beginPath();
       sctx.moveTo(scr[e[0]][0], scr[e[0]][1]);
       sctx.lineTo(scr[e[1]][0], scr[e[1]][1]);
       sctx.stroke();
     }
+  }
+  // Beyond the display-mesh cap the mesh is what exists up to RENDER_MAX -- dim it and
+  // say so, so "ε > render" never looks like a fully built complex while the label
+  // claims the exact full-simplex answer at ε = Dmax.
+  if (CONN && eps > RENDER_MAX + 1e-9 && CONN.max > CONN.cap + 1e-9){
+    sctx.globalAlpha = 0.55;
+    sctx.fillStyle = "#0b1020";
+    sctx.fillRect(0, 6, w, 26);
+    sctx.globalAlpha = 1;
+    sctx.fillStyle = "#e8ecf6";
+    sctx.font = "12px ui-monospace, monospace";
+    sctx.fillText("Oberfläche gerendert bis ε = " + RENDER_MAX.toFixed(3) +
+                  "  (2-Komplex darüber infeasibel) — β bleibt exakt", 10, 23);
   }
   if (showPoints){
     for (let i=0;i<P.length;i++){
@@ -2742,8 +2859,10 @@ function updateCards(){
       "\n" + (msg || "(keine aktive Dimension)") +
       "\n\nFeature (volle Struktur, " + (DATA.feat_route || "?") + "):\n" + DATA.topo_feature +
       "\n\nFeature β = [" + DATA.feat_row.join(", ") + "]";
-    dynBadge.textContent = firstClause(DATA.dyn_feature);
-    dynBadge.title = "Dynamics-Hypothese (volle Struktur): " + DATA.dyn_feature;
+    dynBadge.textContent = firstClause((DATA.dyn_messages && DATA.dyn_messages[ki]) || "");
+    dynBadge.title = "Dynamics bei ε = " + eps.toFixed(3) +
+      ":\n" + ((DATA.dyn_messages && DATA.dyn_messages[ki]) || "") +
+      "\n\nFeature (volle Struktur, " + (DATA.feat_route || "?") + "):\n" + DATA.dyn_feature;
     const cards = document.querySelectorAll(".card");
     const nb = DATA.target ? b.slice(0, DATA.target.length) : [];
     const allNum = nb.every(v => typeof v === "number" && Number.isFinite(v));
@@ -2816,7 +2935,7 @@ function render(){
     ro.textContent = `layer ${DATA.layers[li]}  ·  t = ${t.toFixed(1)}/${N_L-1}`;
   } else {
     let extra = "";
-    if (CONN && eps > CONN.cap - 1e-9){
+    if (CONN && eps > RENDER_MAX - 1e-9){
       if (CONN.probe_min != null && eps >= CONN.probe_min - 1e-9)
         extra = "  ·  exakt via Homotopie-Reduktion (Kern-Komplex)";
       else
@@ -2926,6 +3045,12 @@ def main() -> int:
     p.add_argument("--index-cols", nargs="*", default=None)
     p.add_argument("--metric", default="euclidean",
                    choices=["euclidean", "squared", "manhattan", "cosine", "normalized_euclidean"])
+    p.add_argument("--memory", choices=["auto", "ram", "disk"], default="auto",
+                   help="where the (possibly huge) pairwise-distance matrix lives: 'auto' spills "
+                        "to a temp-file memmap when it would exceed ~512 MiB of RAM (good for "
+                        "big local clouds), 'disk' always spills (temp .npy, deleted on exit), "
+                        "'ram' keeps it fully in memory -- use 'ram' on an HPC node with plenty "
+                        "of RAM for speed.")
     p.add_argument("--max-dim", type=int, default=2)
     p.add_argument("--n", type=int, default=8, help="torus-grid per-axis cells / circle points / sphere points")
     p.add_argument("--nper", type=int, default=10, help="points per circle (donut/product grids)")
@@ -2946,6 +3071,10 @@ def main() -> int:
     p.add_argument("--feasible-res", type=float, default=_FEASIBLE_RES,
                    help="absolute epsilon resolution of the feasibility-cap binary search "
                         "(default %(default)s)")
+    p.add_argument("--render-budget", type=int, default=_RENDER_MAX_BUDGET,
+                   help="max simplices of the SEPARATE display mesh (max_dim=2) built up "
+                        "to the largest epsilon that keeps the 3D view under this budget; "
+                        "beta numbers never come from this mesh (default %(default)s)")
     p.add_argument("--probe-max-core", type=int, default=_PROBE_MAX_CORE,
                    help="max vertices of the reduced core for an exact far-tail homology "
                         "probe past the 2-complex cap (default %(default)s)")
@@ -2966,7 +3095,6 @@ def main() -> int:
     p.add_argument("--out", default="interactive.html", help="output HTML file")
     args = p.parse_args()
 
-    console = Console()
     _rich_ui.params_table(p, args, console)
 
     t0 = time.time()
@@ -3008,8 +3136,22 @@ def main() -> int:
     return 0
 
 
+def _cleanup_temp_files() -> None:
+    """Delete the spill-to-disk np.memmap files (best-effort)."""
+    for path in _MMAP_FILES:
+        try:
+            if os.path.exists(path):
+                os.remove(path)
+        except OSError:
+            pass
+    _MMAP_FILES.clear()
+
+
 beartype_module(__name__)
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    try:
+        raise SystemExit(main())
+    finally:
+        _cleanup_temp_files()
