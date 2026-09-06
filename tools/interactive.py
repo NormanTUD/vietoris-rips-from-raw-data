@@ -41,9 +41,11 @@ Examples:
 """
 import argparse
 import json
+import math
 import sys
 import time
 import traceback
+from collections.abc import Sequence
 from pathlib import Path
 
 ROOT = str(Path(__file__).resolve().parents[1])
@@ -186,18 +188,23 @@ def _build_rips_safe(X: np.ndarray, D: np.ndarray, eps_max: float, max_dim: int,
 # pure-Python homology and the browser both choke.
 _FEASIBLE_DEFAULT_BUDGET: int = 100_000
 _FEASIBLE_MAX_BUDGET: int = 160_000
+_FEASIBLE_RES: float = 1e-3
 
 
 def _max_feasible_eps(X: np.ndarray, D: np.ndarray, eps_hi: float,
-                      budget: int, lo: float = 0.0, iters: int = 6) -> float:
+                      budget: int, lo: float = 0.0, iters: int = 0) -> float:
     """SAFEGUARD (feasibility): the largest eps in [lo, eps_hi] at which build_rips
     (max_dim=2) keeps <= budget simplices. The simplex count is monotone non-decreasing
     in eps, so a binary search finds it. Each probe is capped at `budget` simplices
     (max_simplices=budget) so an infeasible eps fails fast instead of building toward the
     2M hard cap. This lets the --points slider span the FULL max-pairwise-distance (Dmax)
-    when feasible, and cap at the largest feasible epsilon otherwise (reported, no crash)."""
+    when feasible, and cap at the largest feasible epsilon otherwise (reported, no crash).
+    iters defaults to ~1e-3 absolute resolution over [0, eps_hi] (fixed 6 was far too
+    coarse once the requested range grew)."""
     lo = float(lo)
     hi = float(eps_hi)
+    if iters <= 0:
+        iters = max(8, math.ceil(math.log2(max(hi, 1e-9) / _FEASIBLE_RES)) + 1)
     try:
         if build_rips(X, D, hi, max_dim=2, max_simplices=budget).n_simplices <= budget:
             return hi  # the full range up to Dmax is feasible
@@ -214,6 +221,83 @@ def _max_feasible_eps(X: np.ndarray, D: np.ndarray, eps_hi: float,
         else:
             hi = mid
     return float(lo)
+
+
+def _components_curve(D: np.ndarray, eps_grid: np.ndarray) -> list[int]:
+    """Connected components of the 1-skeleton at each ε (union-find over the edges that
+    have appeared). EXACT and cheap: 'when does the cloud become one structure' is a
+    graph question, so it can be answered past the feasible-2-complex cap -- the graph
+    is all that matters for β₀, never the triangles that make the full complex blow up."""
+    n = int(D.shape[0])
+    if n <= 1:
+        return [1] * len(eps_grid)
+    iu = np.triu_indices(n, 1)
+    w = np.asarray(D[iu])
+    order = np.argsort(w)
+    edge_a = iu[0][order].tolist()
+    edge_b = iu[1][order].tolist()
+    edge_w = w[order].tolist()
+    parent = list(range(n))
+    rank = [0] * n
+    comp = n
+
+    def find(a: int) -> int:
+        while parent[a] != a:
+            parent[a] = parent[parent[a]]
+            a = parent[a]
+        return a
+
+    def union(a: int, b: int) -> bool:
+        nonlocal comp
+        ra, rb = find(a), find(b)
+        if ra == rb:
+            return False
+        if rank[ra] < rank[rb]:
+            ra, rb = rb, ra
+        parent[rb] = ra
+        if rank[ra] == rank[rb]:
+            rank[ra] += 1
+        comp -= 1
+        return True
+
+    out: list[int] = []
+    ei = 0
+    m = len(edge_a)
+    for e in eps_grid:
+        lim = float(e)
+        while ei < m and edge_w[ei] <= lim:
+            union(edge_a[ei], edge_b[ei])
+            ei += 1
+        out.append(comp)
+    return out
+
+
+def _beyond_cap(c: int, maxdim: int, cap: float) -> tuple[list[int], str, list[str], dict[int, str], str]:
+    """Recognition rows for ε ABOVE the feasible 2-complex cap: β₀ is exact (1-skeleton),
+    H₁..H_top are UNKNOWN (honestly -- the complex that would measure them is infeasible,
+    so a number would be a lie). Returns (struct_row, topo_message, dim_summaries,
+    masked_messages, dyn_message)."""
+    row = [int(c)] + [0] * int(maxdim)
+    msg = (f"β₀ = {c} Komponente(n) — exakt aus dem 1-Skelett; H₁…H_{maxdim} sind "
+           f"jenseits ε={cap:.3f} NICHT bestimmbar (der 2-Komplex ist dort infeasibel)")
+    if maxdim >= 1:
+        dims = ([f"{c} Komponente(n) — 1-Skelett, exakt (jenseits der 2-Komplex-Grenze "
+                 f"ε={cap:.3f})" if c != 1 else f"1 Komponente — die Wolke ist "
+                 f"zusammenhängend (1-Skelett, jenseits der 2-Komplex-Grenze ε={cap:.3f})"]
+                + [f"H_{d}: NICHT bestimmbar — 2-Komplex infeasibel jenseits ε={cap:.3f}"
+                   for d in range(1, maxdim + 1)])
+    else:
+        dims = [f"{c} Komponente(n) — 1-Skelett, exakt"]
+    fullm = (1 << (maxdim + 1)) - 1
+    masked: dict[int, str] = {}
+    for m in range(1, fullm + 1):
+        if m == 1:
+            masked[m] = (f"only H₀: {c} Komponente(n) — exakt aus dem 1-Skelett"
+                         if c != 1 else "only H₀: 1 Komponente — zusammenhängend")
+        else:
+            masked[m] = msg
+    dyn_msg = "keine Dynamik-Aussage — H₁/H₂ unbekannt jenseits der 2-Komplex-Grenze"
+    return row, msg, dims, masked, dyn_msg
 
 
 def _pca3(X: np.ndarray) -> np.ndarray:
@@ -880,15 +964,17 @@ def build_source(args: argparse.Namespace) -> tuple[FilteredComplex, np.ndarray,
         # the largest value that can actually be built. Sparse clouds reach Dmax in full.
         eps_max = _max_feasible_eps(X, D, eps_hi, budget=_FEASIBLE_MAX_BUDGET)
         if eps_max < eps_hi - 1e-9:
-            console.print(f"[yellow]NOTE: max distance {eps_hi:.3f} is infeasible for this "
-                          f"{X.shape[0]}-pt cloud (the Rips complex would have millions of "
-                          f"simplices); capping the slider at the largest feasible "
-                          f"{eps_max:.3f}. For a clean torus use `--shape donut` (or drop "
+            console.print(f"[yellow]NOTE: the 2-complex up to ε={eps_hi:.3f} is infeasible "
+                          f"for this {X.shape[0]}-pt cloud (millions of simplices); only the "
+                          f"2-complex is built up to ε={eps_max:.3f}, then β₀ continues via "
+                          f"the 1-skeleton. For a clean torus use `--shape donut` (or drop "
                           f"--no-exact-torus if this is a torus grid).[/yellow]")
         C = _build_rips_safe(X, D, eps_max, max_dim)
         n_faces = sum(1 for s in C.simplexes if len(s) == 3)
         if _is_overfilling(X.shape[0], n_faces):
             _rich_ui.overfill_note(console, X.shape[0], n_faces)
+        C.params["D"] = D
+        C.params["rng_hi"] = float(eps_hi)
         pts, proj = _to3d(X, "rips")
         _attach_raw(C, X)
         return C, pts, proj, None, min(max_dim - 1, 3)
@@ -951,19 +1037,23 @@ def build_source(args: argparse.Namespace) -> tuple[FilteredComplex, np.ndarray,
     # plateau is exactly why the (already exact-torus-path) demo exists.
     if args.shape == "product" and k == 2:
         eps_max = _eps_max(D, args.frac, getattr(args, "connect_margin", 1.2))
+        eps_hi = eps_max
     else:
         eps_hi = float(D.max())
         eps_max = _max_feasible_eps(X, D, eps_hi, budget=_FEASIBLE_MAX_BUDGET)
         if eps_max < eps_hi - 1e-9:
-            console.print(f"[yellow]NOTE: max distance {eps_hi:.3f} is infeasible for this "
-                          f"{X.shape[0]}-pt Rips complex; capping the slider at the largest "
-                          f"feasible {eps_max:.3f}.[/yellow]")
+            console.print(f"[yellow]NOTE: the 2-complex up to ε={eps_hi:.3f} is infeasible "
+                          f"for this {X.shape[0]}-pt Rips complex; only the 2-complex is "
+                          f"built up to ε={eps_max:.3f}, then β₀ continues via the "
+                          f"1-skeleton.[/yellow]")
     # Cap at 3-simplices: this is a fast beta_0..beta_2 visualizer, and (k+1)-simplices
     # are combinatorially infeasible for k>=3 (5-cliques explode). For k>=3 the low
     # dimensions beta_0..beta_2 are still exact under Rips; the top class needs the
     # exact cell complex (see tests/test_betti_shapes.py).
     max_dim = min(max(k + 1, 2, args.max_dim), 3)
     C = _build_rips_safe(X, D, eps_max, max_dim)
+    C.params["D"] = D
+    C.params["rng_hi"] = float(eps_hi)
     _attach_raw(C, X)
     if args.shape == "product" and k == 2:
         # The R^4 product 2-torus is 4-fold symmetric, so a PCA-3D view collapses to a
@@ -1134,6 +1224,81 @@ def build_payload(args: argparse.Namespace) -> dict[str, object]:
             topo_feature = (f"a round torus-hypersurface T^{f1} (radius R≈{R:.2f}): "
                             f"{geo}; the {f1} independent H_1 cycles are the frequencies.")
 
+    # ---- extended slider: β₀ continues past the feasible 2-complex cap ----
+    # Recognition + mesh are built up to eps_cap. When the requested range (rng_hi, the
+    # full max-pairwise-distance or --eps-max) is larger, the UI grid extends to it:
+    #   * β₀ stays EXACT via the 1-SKELETON (union-find -- a graph question);
+    #   * β₁..β_top are honestly UNKNOWN there (the 2-complex is infeasible: no number
+    #     is better than a lie);
+    #   * the plot marks the 2-complex cap and the ε* where the cloud merges.
+    raw_cloud = np.asarray(C.params.get("raw", pts), dtype=np.float64)
+    if raw_cloud.shape[0] != len(pts):          # (raw_cloud re-derived only if needed)
+        raise VrtdaError("raw cloud misaligned -- see build_source")
+    eps_cap = float(eps_max)
+    eps_ui = float(C.params.get("rng_hi", eps_cap))
+    ext = C.kind == "rips" and eps_ui > eps_cap + 1e-9
+    conn: dict[str, object] | None = None
+    grid_use = grid
+    table_use: list[list[float | None]] = [[round(float(v), 5) for v in row] for row in table]
+    if ext:
+        grid_ui = np.linspace(0.0, eps_ui, n_grid)
+        Dc = C.params.get("D")
+        if Dc is None:
+            Dc = pairwise_distances(raw_cloud, args.metric)
+        Dc_full = np.asarray(Dc, dtype=np.float64)
+        comps = _components_curve(Dc_full, grid_ui)
+        n_ui = len(grid_ui)
+        cap_idx = max(0, int(np.searchsorted(grid_ui, eps_cap, side="right")) - 1)
+        merge_idx = next((i for i, c in enumerate(comps) if c <= 1), None)
+        conn = {"merge": round(float(grid_ui[merge_idx]), 5) if merge_idx is not None else None,
+                "cap": round(float(eps_cap), 5),
+                "max": round(float(eps_ui), 5)}
+        if merge_idx is None and float(Dc_full.max()) > eps_ui + 1e-9:
+            # the cloud merges beyond the requested ceiling -- find where, so we can tell
+            # the user honestly ("your points only connect at ε≈…") instead of implying the
+            # data never connects.
+            grid2 = np.linspace(eps_ui, float(Dc_full.max()), 120)
+            comps2 = _components_curve(Dc_full, grid2)
+            m2 = next((i for i, c in enumerate(comps2) if c <= 1), None)
+            if m2 is not None:
+                conn["merge_beyond"] = round(float(grid2[m2]), 5)
+                console.print(f"[yellow]NOTE: this cloud only becomes ONE connected structure "
+                              f"at ε≈{grid2[m2]:.3f}, but the requested ε ceiling is "
+                              f"{eps_ui:.3f}. Omit --eps-max to span the full range "
+                              f"0..{float(Dc_full.max()):.3f} and watch it connect.[/yellow]")
+
+        def _pick(seq: Sequence[object]) -> list[object]:
+            out: list[object] = []
+            for i in range(cap_idx + 1):
+                hi = min(n_ui - 1, int(round(float(grid_ui[i]) / eps_cap * (n_ui - 1))))
+                out.append(seq[hi])
+            return out
+
+        sr = _pick(struct_rows)
+        tm = _pick(topo_messages)
+        tc = _pick(topo_closest)
+        dm = _pick(dyn_messages)
+        dc = _pick(dyn_closest)
+        dt = _pick(dyn_transitions)
+        dsm = _pick(dim_summaries)
+        mm = _pick(masked_messages)
+        table_use = [[None] * (maxdim + 1) for _ in range(n_ui)]
+        for i in range(cap_idx + 1):
+            hi = min(n_ui - 1, int(round(float(grid_ui[i]) / eps_cap * (n_ui - 1))))
+            table_use[i] = [round(float(v), 5) for v in table[hi]]
+            table_use[i][0] = round(float(comps[i]), 5)
+        for i in range(cap_idx + 1, n_ui):
+            c = int(comps[i])
+            srow, tmsg, dss, mmsk, dmsg = _beyond_cap(c, maxdim, eps_cap)
+            sr.append(srow); tm.append(tmsg); tc.append([])
+            dm.append(dmsg); dc.append([]); dt.append("")
+            dsm.append(dss); mm.append(mmsk)
+            table_use[i][0] = round(float(comps[i]), 5)
+        struct_rows, topo_messages, topo_closest = sr, tm, tc
+        dyn_messages, dyn_closest, dyn_transitions = dm, dc, dt
+        dim_summaries, masked_messages = dsm, mm
+        grid_use = grid_ui
+
     n = len(pts)
     edges = [[int(a), int(b), round(float(C.values[C.index_of((int(a), int(b)))]), 5)]
              for (a, b) in (s for s in C.simplexes if len(s) == 2)]
@@ -1151,14 +1316,16 @@ def build_payload(args: argparse.Namespace) -> dict[str, object]:
     if "PCA" in proj:
         extra = f" · topology computed in the original high-dim space"
     sub = (f"{proj}{extra}  ·  {n} points  ·  {len(edges)} edges / {len(faces)} faces  ·  "
-           f"ε_max = {eps_max:.3f}" + (f"  ·  target β = {target}" if target else ""))
+           f"ε_max = {eps_cap:.3f}" + (f"  ·  β₀ bis ε={eps_ui:.2f} (1-Skelett), β₁₂ nur "
+           f"bis ε={eps_cap:.2f}" if ext else "") + (f"  ·  target β = {target}" if target else ""))
 
     return {
         "mode": "filtration",
         "title": title,
         "sub": sub,
         "metric": args.metric,
-        "eps_max": round(eps_max, 5),
+        "eps_max": round(eps_cap, 5),
+        "eps_ui": round(eps_ui, 5),
         "projection": proj,
         "target": target,
         "maxdim": maxdim,
@@ -1166,7 +1333,8 @@ def build_payload(args: argparse.Namespace) -> dict[str, object]:
         "raw": [[round(float(v), 5) for v in row] for row in raw_cloud],
         "edges": edges,
         "faces": faces,
-        "betti": {"grid": _round_list(list(grid)), "table": table.tolist(), "maxdim": maxdim},
+        "betti": {"grid": _round_list(list(grid_use)), "table": table_use, "maxdim": maxdim},
+        "conn": conn,
         "topo_messages": topo_messages,
         "topo_closest": topo_closest,
         "dyn_messages": dyn_messages,
@@ -1699,9 +1867,14 @@ const DATA = __DATA__;
 const MODE = DATA.mode || "filtration";
 const DIM_NAME = {0:"H₀ components", 1:"H₁ loops / holes", 2:"H₂ voids", 3:"H₃", 4:"H₄"};
 const DIM_COLOR = {0:"#4ea1ff", 1:"#3fd07a", 2:"#ff9f45", 3:"#e060c0", 4:"#c9d16a"};
-const EMAX = (DATA.eps_max || 1);
+// HOM = the largest ε where the full 2-complex (and hence β₁/β₂) is EXACT. EMAX =
+// the slider range: for dense clouds it can exceed HOM -- past it only β₀ is exact
+// (1-skeleton), which the server ships as nulls in the table + a conn marker block.
+const HOM = (DATA.eps_max || 1);
+const EMAX = (DATA.eps_ui || HOM);
 const MD = DATA.maxdim || 0;
 const P = DATA.points || [], E = DATA.edges || [], F = DATA.faces || [], IV = DATA.intervals || [];
+const CONN = DATA.conn || null;
 const GRID = (DATA.betti && DATA.betti.grid) || [0,1];
 const TABLE = (DATA.betti && DATA.betti.table) || [[0]];
 
@@ -1720,6 +1893,7 @@ const N_TOK = DATA.n_tokens || 0;
 const GROUP = DATA.group_of || [];
 
 let rx = -0.45, ry = 0.7, eps = 0, t = 0, playing = false, raf = null, lastT = 0;
+let zoom = 1;   // canvas zoom factor (mouse wheel over the scene)
 let showPoints = true, showEdges = true, showFaces = true, shade = true;
 let fitR = 1.0;
 // Cached depth (painter's) order of the faces. It depends only on the view
@@ -1734,8 +1908,8 @@ const conv  = document.getElementById("conv"),  cctx = conv.getContext("2d");
 document.getElementById("title").textContent = DATA.title;
 document.getElementById("sub").textContent = DATA.sub;
 document.getElementById("hint").textContent = MODE === "trajectory"
-  ? "drag to rotate · slider / ▶ Play to step through layers (time)"
-  : "drag to rotate · slider / ▶ Play to step the filtration ε";
+  ? "drag to rotate · mouse wheel to zoom · slider / ▶ Play to step through layers (time)"
+  : "drag to rotate · mouse wheel to zoom · slider / ▶ Play to step the filtration ε";
 
 // ---- side cards ----------------------------------------------------------
 const cardsEl = document.getElementById("cards");
@@ -1832,7 +2006,7 @@ function computeFit(){
   fitR = Math.sqrt(mx) || 1;
 }
 function toScreen(q, w, h){
-  const s = Math.min(w, h) * 0.42 / fitR;
+  const s = Math.min(w, h) * 0.42 / fitR * zoom;
   return [ w/2 + q[0]*s, h/2 - q[1]*s, q[2] ];
 }
 
@@ -1899,7 +2073,7 @@ function renderScene(){
       sctx.lineWidth = 0.6;
       for (const i of faceOrder){
         const f = F[i]; if (f[3] > eps) continue;
-        const base = colormap(f[3]/EMAX);
+        const base = colormap(f[3]/HOM);
         const col = shade ? shadeColor(proj[f[0]],proj[f[1]],proj[f[2]],base,fitR) : base;
         sctx.beginPath();
         sctx.moveTo(scr[f[0]][0], scr[f[0]][1]);
@@ -1916,7 +2090,7 @@ function renderScene(){
       const buckets = new Map();
       for (const i of faceOrder){
         const f = F[i]; if (f[3] > eps) continue;
-        const base = colormap(f[3]/EMAX);
+        const base = colormap(f[3]/HOM);
         const col = shade ? shadeColor(proj[f[0]],proj[f[1]],proj[f[2]],base,fitR) : base;
         const key = (((col[0]|0)>>5)&7)*64 + (((col[1]|0)>>5)&7)*8 + (((col[2]|0)>>5)&7);
         let g = buckets.get(key);
@@ -1942,7 +2116,7 @@ function renderScene(){
       if (e[2] > eps) continue;
       const z = (proj[e[0]][2]+proj[e[1]][2])/2;
       const a = shade ? 0.3+0.6*depthT(z,fitR) : 0.9;
-      sctx.strokeStyle = rgba(colormap(e[2]/EMAX), a);
+      sctx.strokeStyle = rgba(colormap(e[2]/HOM), a);
       sctx.beginPath();
       sctx.moveTo(scr[e[0]][0], scr[e[0]][1]);
       sctx.lineTo(scr[e[1]][0], scr[e[1]][1]);
@@ -2005,11 +2179,11 @@ function renderDiagram(){
   dctx.save(); dctx.scale(dpr, dpr);
   dctx.clearRect(0,0,w,h);
   const m = 26, pw = w-m-8, ph = h-m-8;
-  const X = v => m + (v/EMAX)*pw, Y = v => h-m - (v/EMAX)*ph;
+  const X = v => m + (v/HOM)*pw, Y = v => h-m - (v/HOM)*ph;
   dctx.strokeStyle = "#3a4553"; dctx.lineWidth = 1;
   dctx.strokeRect(m, 8, pw, ph);
   dctx.strokeStyle = "#5a6675"; dctx.setLineDash([4,4]);
-  dctx.beginPath(); dctx.moveTo(X(0),Y(0)); dctx.lineTo(X(EMAX),Y(EMAX)); dctx.stroke(); dctx.setLineDash([]);
+  dctx.beginPath(); dctx.moveTo(X(0),Y(0)); dctx.lineTo(X(HOM),Y(HOM)); dctx.stroke(); dctx.setLineDash([]);
   dctx.strokeStyle = "#e6edf3"; dctx.globalAlpha=0.5; dctx.lineWidth=1;
   dctx.beginPath(); dctx.moveTo(X(eps),8); dctx.lineTo(X(eps),h-m); dctx.stroke();
   dctx.beginPath(); dctx.moveTo(m,Y(eps)); dctx.lineTo(w-8,Y(eps)); dctx.stroke(); dctx.globalAlpha=1;
@@ -2037,12 +2211,36 @@ function renderBfun(){
   let maxB = 1; for (const row of TABLE) for (const v of row) if (v>maxB) maxB=v;
   const X = i => m + (i/(GRID.length-1))*pw, Y = v => 8 + ph - (v/maxB)*ph;
   bctx.strokeStyle="#3a4553"; bctx.strokeRect(m,8,pw,ph);
+  // Beyond the 2-complex cap only β₀ is exact: shade the region, mark the cap, and
+  // mark the ε* where the cloud merges into a single component.
+  if (CONN && CONN.cap < EMAX - 1e-9){
+    const capX = m + (CONN.cap/EMAX)*pw;
+    bctx.fillStyle = "#0d1117"; bctx.globalAlpha = 0.38;
+    bctx.fillRect(capX, 8, m+pw-capX, ph); bctx.globalAlpha = 1;
+    bctx.strokeStyle = "#ffd866"; bctx.globalAlpha = 0.7; bctx.setLineDash([4,3]);
+    bctx.beginPath(); bctx.moveTo(capX,8); bctx.lineTo(capX,8+ph); bctx.stroke();
+    bctx.setLineDash([]); bctx.globalAlpha = 1;
+    bctx.fillStyle = "#d3b94f"; bctx.font = "10px system-ui";
+    bctx.fillText("2-Komplex-Grenze ε=" + CONN.cap.toFixed(3) +
+                  "  (ab hier nur β₀ exakt)", Math.max(m, capX - 118), 22);
+  }
+  if (CONN && CONN.merge != null){
+    const mx = m + (CONN.merge/EMAX)*pw;
+    bctx.strokeStyle = "#e060c0"; bctx.globalAlpha = 0.8; bctx.setLineDash([3,3]);
+    bctx.beginPath(); bctx.moveTo(mx,8); bctx.lineTo(mx,8+ph); bctx.stroke();
+    bctx.setLineDash([]); bctx.globalAlpha = 1;
+    bctx.fillStyle = "#e060c0"; bctx.font = "10px system-ui";
+    bctx.fillText("β₀=1 ε=" + CONN.merge.toFixed(3), Math.max(m, mx - 104), 22);
+  }
   for (let d=0; d<=MD; d++){
     if (!dimsOn[d]) continue;
     bctx.strokeStyle = DIM_COLOR[d]; bctx.lineWidth=1.6; bctx.beginPath();
+    let started=false;
     for (let i=0;i<GRID.length;i++){
-      const x=X(i), y=Y(TABLE[i][d]);
-      if (i===0) bctx.moveTo(x,y); else bctx.lineTo(x,y);
+      const v = TABLE[i][d];
+      if (v == null || Number.isNaN(v)){ started=false; continue; }   // break at 2-complex cap
+      const x=X(i), y=Y(v);
+      if (!started){ bctx.moveTo(x,y); started=true; } else bctx.lineTo(x,y);
     }
     bctx.stroke();
   }
@@ -2222,8 +2420,10 @@ function updateCards(){
     const ki = Math.max(0, Math.min((DATA.struct_rows || []).length - 1,
                                     Math.round(eps / EMAX * ((DATA.struct_rows || []).length - 1))));
     for (let d=0; d<=MD; d++){
-      cardNums[d].textContent = b[d];
+      const v = b[d];
+      cardNums[d].textContent = (v == null || Number.isNaN(v)) ? "…" : v;
       cardNums[d].style.color = DIM_COLOR[d];
+      cardNums[d].style.opacity = (v == null || Number.isNaN(v)) ? 0.45 : 1;
     }
     const badge = document.getElementById("badge");
     const dynBadge = document.getElementById("dynbadge");
@@ -2246,33 +2446,34 @@ function updateCards(){
     dynBadge.textContent = firstClause(DATA.dyn_feature);
     dynBadge.title = "Dynamics-Hypothese (volle Struktur): " + DATA.dyn_feature;
     const cards = document.querySelectorAll(".card");
-    const matchAll = DATA.target && mask === fullMask &&
-      b.slice(0, DATA.target.length).every((v,i)=>v===DATA.target[i]);
+    const nb = DATA.target ? b.slice(0, DATA.target.length) : [];
+    const allNum = nb.every(v => typeof v === "number" && Number.isFinite(v));
+    const matchAll = DATA.target && mask === fullMask && allNum &&
+      nb.every((v,i)=>v===DATA.target[i]);
     for (let d=0; d<=MD; d++){
       const c = cards[d]; if (!c) continue;
       c.style.display = dimsOn[d] ? "" : "none";
       c.title = dimCardNote(ki, d);
       c.classList.toggle("match", matchAll);
     }
-    if (DATA.target && mask === fullMask){
-      // Guardrail: at the top of the slider the computed Betti vector MUST equal the
-      // declared target (e.g. a rebuilt exact T^2 must read [1,2,1]). A mismatch is a
-      // loud error, never a silent wrong answer.
-      if (eps === EMAX){
-        if (!matchAll && !mismatchShown){
-          mismatchShown = true;
-          showError("Topology mismatch at max ε",
-            "Betti(" + EMAX + ") = [" + b.slice(0, DATA.target.length).join(", ") +
-            "] but DATA.target = [" + DATA.target.join(", ") +
-            "].\n\nThe slider is at its maximum, so every simplex in the dataset must be " +
-            "present — this build should yield exactly the declared target topology. The " +
-            "data or the build path is inconsistent (look at the Python-side traceback).",
-            "target");
-        }
-      } else {
-        mismatchShown = false;
-        hideError();
+    // Guardrail: at the top of the computable range (HOM, the 2-complex cap) the
+    // computed Betti vector MUST equal the declared target. A mismatch is a loud
+    // error, never a silent wrong answer. Beyond the cap (dense clouds) the higher
+    // Betti numbers are honestly null, so the guardrail is deliberately quiet there.
+    if (DATA.target && mask === fullMask && eps === HOM && (!CONN || eps <= CONN.cap + 1e-9)){
+      if (!matchAll && !mismatchShown){
+        mismatchShown = true;
+        showError("Topology mismatch at the 2-complex max ε",
+          "Betti(" + HOM + ") = [" + nb.map(v=>v==null?"…":v).join(", ") +
+          "] but DATA.target = [" + DATA.target.join(", ") +
+          "].\n\nThe slider is at the largest ε where every simplex of the 2-complex is " +
+          "present — this build should yield exactly the declared target topology. The " +
+          "data or the build path is inconsistent (look at the Python-side traceback).",
+          "target");
       }
+    } else if (eps !== HOM || mismatchShown){
+      mismatchShown = false;
+      if (eps !== HOM) hideError();
     }
     renderSyst();
   } else {
@@ -2315,7 +2516,14 @@ function render(){
     const li = Math.max(0, Math.min(N_L-1, Math.round(t)));
     ro.textContent = `layer ${DATA.layers[li]}  ·  t = ${t.toFixed(1)}/${N_L-1}`;
   } else {
-    ro.textContent = `ε = ${eps.toFixed(3)}  /  ${EMAX.toFixed(3)}`;
+    let extra = "";
+    if (CONN && eps > CONN.cap - 1e-9){
+      extra = "  ·  jenseits der 2-Komplex-Grenze: nur β₀ (1-Skelett)";
+      if (CONN.merge != null && eps >= CONN.merge) extra += "  ·  β₀=1 ✓ zusammenhängend";
+      else if (CONN.merge_beyond != null) extra += `  ·  mergt erst bei ε≈${CONN.merge_beyond.toFixed(3)}`;
+    }
+    if (zoom > 1.001) extra += `  ·  view ×${zoom.toFixed(1)}`;
+    ro.textContent = `ε = ${eps.toFixed(3)}  /  ${EMAX.toFixed(3)}` + extra;
   }
 }
 
@@ -2352,7 +2560,7 @@ playBtn.addEventListener("click", () => {
   raf = requestAnimationFrame(tick);
 });
 document.getElementById("reset").addEventListener("click", () => { stopPlay(); if (MODE==="trajectory") t=0; else eps=0; setSlider(); render(); });
-document.getElementById("resetview").addEventListener("click", () => { rx=-0.45; ry=0.7; render(); });
+document.getElementById("resetview").addEventListener("click", () => { rx=-0.45; ry=0.7; zoom=1; render(); });
 
 document.getElementById("t-points").addEventListener("change", e=>{showPoints=e.target.checked; render();});
 document.getElementById("t-edges").addEventListener("change", e=>{showEdges=e.target.checked; render();});
@@ -2375,6 +2583,14 @@ scene.addEventListener("touchstart", e=>{const p=e.touches[0];dragging=true;lx=p
 scene.addEventListener("touchend", ()=>dragging=false);
 scene.addEventListener("touchmove", e=>{const p=e.touches[0];ry+=(p.clientX-lx)*0.01;rx+=(p.clientY-ly)*0.01;
   rx=Math.max(-1.5,Math.min(1.5,rx)); lx=p.clientX; ly=p.clientY; render();},{passive:true});
+
+// mouse wheel over the scene zooms the canvas (clamped, around the centre)
+scene.addEventListener("wheel", e=>{
+  e.preventDefault();
+  const f = e.deltaY < 0 ? 1.15 : 1/1.15;
+  zoom = Math.max(1, Math.min(60, zoom * f));
+  render();
+}, {passive:false});
 
 // ---- go ------------------------------------------------------------------
 fitAll();
